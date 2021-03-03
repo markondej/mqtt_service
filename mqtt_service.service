@@ -1,0 +1,11 @@
+[Unit]
+Description=MQTT Service
+Documentation=https://www.github.com/markondej/mqtt_service
+After=network.target
+
+[Service]
+ExecStart=/usr/sbin/{EXECUTABLE}
+
+[Install]
+WantedBy=multi-user.target
+Alias=mqtt_service.service
