@@ -238,7 +238,7 @@ namespace mqtt {
             }
             topics.push_back({ ++topicSequence, topicName, std::vector<Topic::Subscription>(), { { payload, requestedQoS } } });
         }
-        uint32_t Count() {
+        unsigned long long Count() {
             std::lock_guard<std::mutex> lock(access);
             return topics.size();
         }
