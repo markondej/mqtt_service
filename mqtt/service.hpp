@@ -8,7 +8,7 @@ using Console = ConsoleWindow;
 #include "../console.hpp"
 #endif
 
-#define SERVICE_DEFAULT_PORT 12345
+#define SERVICE_DEFAULT_PORT 1883
 #define SERVICE_DEFAULT_ADDRESS "0.0.0.0"
 
 #ifndef SERVICE_DEFAULT_MAX_CONNECTIONS
