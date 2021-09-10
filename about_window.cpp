@@ -7,9 +7,9 @@
 
 #define ABOUT_NOP_INTERVAL 1000
 
-#define ID_ABOUT_BUTTON_OK 202
-#define ID_ABOUT_LABEL_PRODUCT_NAME 203
-#define ID_ABOUT_LABEL_COPYRIGHT 204
+#define ID_ABOUT_BUTTON_OK IDOK
+#define ID_ABOUT_LABEL_PRODUCT_NAME 202
+#define ID_ABOUT_LABEL_COPYRIGHT 203
 
 AboutWindow::AboutWindow(HWND parent)
     : Window(parent), productInfo("040904b0")
@@ -22,7 +22,7 @@ AboutWindow::AboutWindow(HWND parent)
     RECT clientArea;
     std::memset(&clientArea, 0, sizeof(RECT));
     clientArea.right = GetScaled(350);
-    clientArea.bottom = GetScaled(130, false);
+    clientArea.bottom = GetScaled(120, false);
 
     try {
         if (!AdjustWindowRectEx(&clientArea, style, false, exStyle)) {
@@ -84,7 +84,7 @@ LRESULT AboutWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexc
 
         hDefaultFont = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 
-        hProductName = CreateWindowEx(0, "STATIC", (productInfo.GetName() + ", Version " + productInfo.GetVersion()).c_str(), WS_CHILD | WS_VISIBLE, GetScaled(112), GetScaled(33, false),
+        hProductName = CreateWindowEx(0, "STATIC", (productInfo.GetName() + ", Version " + productInfo.GetVersion()).c_str(), WS_CHILD | WS_VISIBLE, GetScaled(112), GetScaled(23, false),
             clientArea.right - GetScaled(126), GetScaled(20, false), hWnd, reinterpret_cast<HMENU>(ID_ABOUT_LABEL_PRODUCT_NAME), hInstance, nullptr);
         if (hProductName == NULL) {
             return -1;
@@ -93,7 +93,7 @@ LRESULT AboutWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexc
             SendMessage(hProductName, WM_SETFONT, reinterpret_cast<WPARAM>(hDefaultFont), static_cast<LPARAM>(FALSE));
         }
 
-        hCopyright = CreateWindowEx(0, "STATIC", productInfo.GetLegalCopyright().c_str(), WS_CHILD | WS_VISIBLE, GetScaled(112), GetScaled(53, false),
+        hCopyright = CreateWindowEx(0, "STATIC", productInfo.GetLegalCopyright().c_str(), WS_CHILD | WS_VISIBLE, GetScaled(112), GetScaled(43, false),
             clientArea.right - GetScaled(126), GetScaled(20, false), hWnd, reinterpret_cast<HMENU>(ID_ABOUT_LABEL_COPYRIGHT), hInstance, nullptr);
         if (hCopyright == NULL) {
             return -1;
@@ -102,7 +102,7 @@ LRESULT AboutWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexc
             SendMessage(hCopyright, WM_SETFONT, reinterpret_cast<WPARAM>(hDefaultFont), static_cast<LPARAM>(FALSE));
         }
 
-        hButton = CreateWindowEx(0, "BUTTON", "OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, clientArea.right - GetScaled(88), GetScaled(97, false),
+        hButton = CreateWindowEx(0, "BUTTON", "OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, clientArea.right - GetScaled(88), GetScaled(87, false),
             GetScaled(80), GetScaled(25, false), hWnd, reinterpret_cast<HMENU>(ID_ABOUT_BUTTON_OK), hInstance, nullptr);
         if (hButton == NULL) {
             return -1;
@@ -116,7 +116,7 @@ LRESULT AboutWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexc
         Destroy();
         break;
     case WM_COMMAND:
-        if ((LOWORD(wParam) == ID_ABOUT_BUTTON_OK) || (LOWORD(wParam) == IDOK)) {
+        if (LOWORD(wParam) == ID_ABOUT_BUTTON_OK) {
             Close();
         }
         break;
@@ -130,7 +130,7 @@ LRESULT AboutWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexc
             if (hPen != NULL) {
                 HGDIOBJ hOldPen = SelectObject(hDC, hPen);
                 HGDIOBJ hOldBrush = SelectObject(hDC, hBackground);
-                Rectangle(hDC, clientArea.left, GetScaled(10, false), clientArea.right, GetScaled(90, false));
+                Rectangle(hDC, 0, 0, clientArea.right, GetScaled(80, false));
                 SelectObject(hDC, hOldBrush);
                 SelectObject(hDC, hOldPen);
                 DeleteObject(hPen);
@@ -141,7 +141,7 @@ LRESULT AboutWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexc
             if (hCompDC != NULL) {
                 HGDIOBJ hOldBitmap = SelectObject(hCompDC, hLogoBitmap);
                 if (GetObject(hLogoBitmap, sizeof(bitmap), &bitmap) != 0) {
-                    BitBlt(hDC, GetScaled(16), GetScaled(10, false) + ((GetScaled(80, false) - 80) >> 1), bitmap.bmWidth, bitmap.bmHeight, hCompDC, 0, 0, SRCCOPY);
+                    BitBlt(hDC, GetScaled(16), (GetScaled(80, false) - 80) >> 1, bitmap.bmWidth, bitmap.bmHeight, hCompDC, 0, 0, SRCCOPY);
                 }
                 SelectObject(hCompDC, hOldBitmap);
                 DeleteDC(hCompDC);

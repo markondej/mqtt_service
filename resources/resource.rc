@@ -7,8 +7,8 @@ IDI_APPLICATION_ICON ICON "application.ico"
 IDB_ABOUT_LOGO BITMAP "logo.bmp"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,9,0,0
- PRODUCTVERSION 0,9,0,0
+ FILEVERSION 0,9,0,1
+ PRODUCTVERSION 0,9,0,1
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -25,12 +25,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Marcin Kondej"
             VALUE "FileDescription", "MQTT Service"
-            VALUE "FileVersion", "0.9.0.0"
+            VALUE "FileVersion", "0.9.0.1"
             VALUE "InternalName", "mqtt_service.exe"
             VALUE "LegalCopyright", "Copyright (c) 2021, Marcin Kondej"
             VALUE "OriginalFilename", "mqtt_service.exe"
             VALUE "ProductName", "MQTT Service"
-            VALUE "ProductVersion", "0.9.0.0"
+            VALUE "ProductVersion", "0.9.0.1"
         END
     END
     BLOCK "VarFileInfo"

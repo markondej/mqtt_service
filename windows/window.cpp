@@ -131,11 +131,13 @@ WPARAM Window::HandleMessages(Thread &thread)
     MSG msg;
     while (true) {
         if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) {
-                break;
+            if ((WindowInstances::GetWindow(msg.hwnd) == nullptr) || !IsDialogMessage(msg.hwnd, &msg)) {
+                if (msg.message == WM_QUIT) {
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
             }
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
         } else if (thread.IsClosed()) {
             for (auto &instance : WindowInstances::GetAll()) {
                 instance.window->Close(TRUE);
