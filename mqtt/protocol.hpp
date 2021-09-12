@@ -74,15 +74,15 @@ namespace mqtt {
         void Enable(const std::string &address, uint16_t port, uint32_t maxConn = 64);
         void Disable();
         bool IsEnabled() const;
-        void SetConnectHandler(ConnectHandler handler);
-        void SetDisconnectHandler(DisconnectHandler handler);
-        void SetPublishHandler(PublishHandler handler);
-        void SetPubackHandler(PubackHandler handler);
-        void SetPubrecHandler(PubackHandler handler);
-        void SetPubrelHandler(PubackHandler handler);
-        void SetPubcompHandler(PubackHandler handler);
-        void SetSubscribeHandler(SubscribeHandler handler);
-        void SetUnsubscribeHandler(UnsubscribeHandler handler);
+        void SetConnectHandler(const ConnectHandler &handler);
+        void SetDisconnectHandler(const DisconnectHandler &handler);
+        void SetPublishHandler(const PublishHandler &handler);
+        void SetPubackHandler(const PubackHandler &handler);
+        void SetPubrecHandler(const PubackHandler &handler);
+        void SetPubrelHandler(const PubackHandler &handler);
+        void SetPubcompHandler(const PubackHandler &handler);
+        void SetSubscribeHandler(const SubscribeHandler &handler);
+        void SetUnsubscribeHandler(const UnsubscribeHandler &handler);
         void Publish(uint64_t connectionId, uint16_t packetId, const std::string &topicName, const std::vector<uint8_t> &payload, const PublishFlags &flags);
         std::string GetAddress(uint64_t connectionId);
     private:

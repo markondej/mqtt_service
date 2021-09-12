@@ -1,12 +1,7 @@
 #pragma once
 
 #include "../thread/thread.hpp"
-#ifdef _WIN32
-#include "../console_window.hpp"
-using Console = ConsoleWindow;
-#else
-#include "../console.hpp"
-#endif
+#include <functional>
 
 #define SERVICE_DEFAULT_PORT 1883
 #define SERVICE_DEFAULT_ADDRESS "0.0.0.0"
@@ -23,17 +18,13 @@ using Console = ConsoleWindow;
 namespace mqtt {
     class Service : public Thread {
     public:
-        struct Error {
-            bool valid;
-            std::string message;
-        };
-        Service(const std::string &address, uint16_t port, const std::shared_ptr<Console> &console = nullptr);
+        using MessageHandler = std::function<void(const std::string &message) noexcept>;
+        using ExceptionHandler = std::function<void(const std::exception &exception) noexcept>;
+        Service(const std::string &address, uint16_t port, const ExceptionHandler &exceptionHandler, const MessageHandler &messageHandler);
         virtual ~Service();
-        Error GetError();
     private:
         static void ServiceThread(Service *instance, const std::string &address, uint16_t port) noexcept;
-        Error error;
-        std::mutex errorAccess;
-        std::shared_ptr<Console> console;
+        ExceptionHandler handleException;
+        MessageHandler printMessage;
     };
 }

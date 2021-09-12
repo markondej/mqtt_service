@@ -1,5 +1,6 @@
 #include "service.hpp"
 #include "protocol.hpp"
+#include <algorithm>
 #include <climits>
 
 #ifndef SERVICE_TOPICS_LIMIT
@@ -479,20 +480,16 @@ namespace mqtt {
         std::mutex access;
     };
 
-    Service::Service(const std::string &address, uint16_t port, const std::shared_ptr<Console> &console)
-        : error({ false, std::string() }), console(console)
+    Service::Service(const std::string &address, uint16_t port, const ExceptionHandler &exceptionHandler, const MessageHandler &messageHandler)
     {
+        printMessage = messageHandler;
+        handleException = exceptionHandler;
         thread = std::thread(ServiceThread, this, address, port);
     }
 
     Service::~Service()
     {
         Close();
-    }
-
-    Service::Error Service::GetError() {
-        std::lock_guard<std::mutex> lock(errorAccess);
-        return error;
     }
 
     void Service::ServiceThread(Service *instance, const std::string &address, uint16_t port) noexcept {
@@ -503,8 +500,8 @@ namespace mqtt {
         Topics topics;
 
         auto print = [&](const std::string &text) {
-            if (instance->console) {
-                instance->console->Print(text);
+            if (instance->printMessage != nullptr) {
+                instance->printMessage(text);
             }
         };
 
@@ -638,36 +635,31 @@ namespace mqtt {
 
             try {
                 server.Enable(address, port, SERVICE_DEFAULT_MAX_CONNECTIONS);
-            } catch (std::exception &e) {
-                std::lock_guard<std::mutex> lock(instance->errorAccess);
-                instance->error.valid = true;
-                instance->error.message = e.what();
+            } catch (std::exception &exception) {
+                instance->handleException(exception);
+                instance->closed = true;;
             }
         });
         auto statusTimestamp = std::chrono::system_clock::now();
         unsigned long long publishedCount = 0;
         while (!instance->closed) {
-            if (instance->GetError().valid) {
-                instance->closed = true;
-            } else {
-                bool active = false;
-                auto packets = topics.PublishPackets(clients);
-                publishedCount += packets.size();
-                published.Append(packets);
-                for (auto handled : published.Handle(topics, server)) {
-                    clients.RemovePacket(handled.first, handled.second);
-                    active = true;
-                }
-                auto now = std::chrono::system_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - statusTimestamp).count() >= SERVICE_STATUS_INTERVAL) {
-                    print("Status: [topics:" + std::to_string(topics.Count()) + ", clients:" + std::to_string(clients.Count()) + ", processed:" + std::to_string(publishedCount) + "]");
-                    statusTimestamp = now;
-                    publishedCount = 0;
-                }
-                requests.HandleExpired();
-                if (packets.empty() && !active) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(SERVICE_NOP_DELAY));
-                }
+            bool active = false;
+            auto packets = topics.PublishPackets(clients);
+            publishedCount += packets.size();
+            published.Append(packets);
+            for (auto handled : published.Handle(topics, server)) {
+                clients.RemovePacket(handled.first, handled.second);
+                active = true;
+            }
+            auto now = std::chrono::system_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - statusTimestamp).count() >= SERVICE_STATUS_INTERVAL) {
+                print("Status: [topics:" + std::to_string(topics.Count()) + ", clients:" + std::to_string(clients.Count()) + ", processed:" + std::to_string(publishedCount) + "]");
+                statusTimestamp = now;
+                publishedCount = 0;
+            }
+            requests.HandleExpired();
+            if (packets.empty() && !active) {
+                std::this_thread::sleep_for(std::chrono::microseconds(SERVICE_NOP_DELAY));
             }
         }
         server.Disable();

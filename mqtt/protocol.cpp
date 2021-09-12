@@ -377,7 +377,7 @@ namespace mqtt {
         TCPServer(const TCPServer &) = delete;
         TCPServer(TCPServer &&) = delete;
         TCPServer &operator=(const TCPServer &) = delete;
-        void SetHandler(EventHandler handler) {
+        void SetHandler(const EventHandler &handler) {
             std::lock_guard<std::mutex> lock(access);
             this->handler = handler;
         }
@@ -960,55 +960,55 @@ namespace mqtt {
         return reinterpret_cast<TCPServer *>(server)->IsEnabled();
     }
 
-    void Server::SetConnectHandler(ConnectHandler handler)
+    void Server::SetConnectHandler(const ConnectHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         connect = handler;
     }
 
-    void Server::SetDisconnectHandler(DisconnectHandler handler)
+    void Server::SetDisconnectHandler(const DisconnectHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         disconnect = handler;
     }
 
-    void Server::SetPublishHandler(PublishHandler handler)
+    void Server::SetPublishHandler(const PublishHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         publish = handler;
     }
 
-    void Server::SetPubackHandler(PubackHandler handler)
+    void Server::SetPubackHandler(const PubackHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         puback = handler;
     }
 
-    void Server::SetPubrecHandler(PubackHandler handler)
+    void Server::SetPubrecHandler(const PubackHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         pubrec = handler;
     }
 
-    void Server::SetPubrelHandler(PubackHandler handler)
+    void Server::SetPubrelHandler(const PubackHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         pubrel = handler;
     }
 
-    void Server::SetPubcompHandler(PubackHandler handler)
+    void Server::SetPubcompHandler(const PubackHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         pubcomp = handler;
     }
 
-    void Server::SetSubscribeHandler(SubscribeHandler handler)
+    void Server::SetSubscribeHandler(const SubscribeHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         subscribe = handler;
     }
 
-    void Server::SetUnsubscribeHandler(UnsubscribeHandler handler)
+    void Server::SetUnsubscribeHandler(const UnsubscribeHandler &handler)
     {
         std::lock_guard<std::mutex> lock(access);
         unsubscribe = handler;

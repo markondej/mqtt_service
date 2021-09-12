@@ -1,5 +1,9 @@
 #include "mqtt/service.hpp"
-#ifndef _WIN32
+#ifdef _WIN32
+#include "console_window.hpp"
+using Console = ConsoleWindow;
+#else
+#include "console.hpp"
 #include <csignal>
 #endif
 
@@ -42,20 +46,23 @@ int main(int argc, char** argv)
     WPARAM result = 1;
 #endif
 
-    std::shared_ptr<Console> console;
+    Console console;
     try {
-        console = std::shared_ptr<Console>(new Console());
-        service = std::shared_ptr<mqtt::Service>(new mqtt::Service(address, port, console));
+        service = std::shared_ptr<mqtt::Service>(new mqtt::Service(address, port, [&](const std::exception &exception) {
+#ifndef _WIN32
+            console.Print(exception.what());
+#else
+            MessageBox(NULL, exception.what(), "Error", MB_OK | MB_ICONERROR);
+#endif
+        }, [&](const std::string &message) {
+            console.Print(message);
+        }));
 #ifndef _WIN32
         while (!service->IsClosed()) {
             std::this_thread::sleep_for(std::chrono::microseconds(CONSOLE_NOP_DELAY));
         }
 #else
         result = Window::HandleMessages(*service);
-        mqtt::Service::Error error = service->GetError();
-        if (error.valid) {
-            MessageBox(NULL, error.message.c_str(), "Error", MB_OK | MB_ICONERROR);
-        }
 #endif
     } catch (...) {
 #ifndef _WIN32
