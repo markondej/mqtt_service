@@ -807,6 +807,7 @@ namespace mqtt {
                 connection->timestamp = timestamp;
             }
             connection->input = updated.input;
+            connection->output = updated.output;
         }
         Connection Delete(uint64_t connectionId) {
             std::lock_guard<std::mutex> lock(access);
@@ -892,23 +893,19 @@ namespace mqtt {
                 return;
             }
             connected = connection.connected;
-            std::vector<uint8_t> inputBuffer, outputBuffer;
-            inputBuffer.resize(connection.input.size() + input.length);
-            std::memcpy(inputBuffer.data(), connection.input.data(), connection.input.size());
-            std::memcpy(&(inputBuffer.data()[connection.input.size()]), input.data, input.length);
-            outputBuffer = connection.output;
+            auto size = connection.input.size();
+            connection.input.resize(size + input.length);
+            std::memcpy(&(connection.input.data()[size]), input.data, input.length);
             auto now = std::chrono::system_clock::now();
-            if (!inputBuffer.empty()) {
-                std::vector<Packet> packetStream = Packet::feedList(inputBuffer);
-                for (Packet &packet : packetStream) {
+            if (!connection.input.empty()) {
+                for (Packet &packet : Packet::feedList(connection.input)) {
                     handled = true;
                     try {
-                        Packet response = HandlePacket(packet, event.connectionId, connected, connection.keepAlive);
-                        std::vector<uint8_t> outputData = response;
-                        if (outputBuffer.size() + outputData.size() > MQTT_BUFFER_MAX_LENGTH) {
+                        std::vector<uint8_t> response = static_cast<std::vector<uint8_t>>(HandlePacket(packet, event.connectionId, connected, connection.keepAlive));
+                        if (connection.output.size() + response.size() > MQTT_BUFFER_MAX_LENGTH) {
                             throw std::runtime_error("Out of memory");
                         }
-                        outputBuffer.insert(outputBuffer.end(), outputData.begin(), outputData.end());
+                        connection.output.insert(connection.output.end(), response.begin(), response.end());
                     } catch (NoPacketException &) {
                         continue;
                     } catch (...) {
@@ -919,12 +916,13 @@ namespace mqtt {
             } else if (connection.keepAlive && (std::chrono::duration_cast<std::chrono::seconds>(now - connection.timestamp).count() > connection.keepAlive + (connection.keepAlive >> 1))) {
                 output.disconnect = true;
             }
-            if ((event.type != TCPServer::Event::Type::Disconnected) && !outputBuffer.empty()) {
-                output.length = static_cast<unsigned>(outputBuffer.size());
-                output.data = new uint8_t[outputBuffer.size()];
-                std::memcpy(output.data, outputBuffer.data(), outputBuffer.size());
+            if ((event.type != TCPServer::Event::Type::Disconnected) && !connection.output.empty()) {
+                output.length = static_cast<unsigned>(connection.output.size());
+                output.data = new uint8_t[connection.output.size()];
+                std::memcpy(output.data, connection.output.data(), connection.output.size());
+                connection.output.clear();
             }
-            if (!inputBuffer.empty() || handled) {
+            if (!connection.input.empty() || handled) {
                 connections->Update(connection, connected, handled, now);
             }
             if (event.type == TCPServer::Event::Type::Disconnected) {

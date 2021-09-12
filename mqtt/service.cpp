@@ -568,11 +568,6 @@ namespace mqtt {
             });
             server.SetPublishHandler([&](uint64_t connectionId, uint16_t packetId, const std::string &topicName, const std::vector<uint8_t> &payload, PublishFlags &flags) -> PublishResponse {
                 Clients::Client client = clients.Get(connectionId);
-                std::size_t found = topicName.find("*");
-                if (found != std::string::npos) {
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", bad topic name");
-                    throw NoPacketException();
-                }
                 if (payload.size() > SERVICE_PAYLOAD_SIZE_LIMIT) {
                     print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", payload size limit exceeded");
                     throw NoPacketException();
