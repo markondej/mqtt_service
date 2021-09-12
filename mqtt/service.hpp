@@ -10,11 +10,6 @@
 #define SERVICE_DEFAULT_MAX_CONNECTIONS USHRT_MAX
 #endif
 
-#ifndef SERVICE_DEFAULT_KEEP_ALIVE_TIME
-#define SERVICE_DEFAULT_KEEP_ALIVE_TIME 60
-#endif
-
-
 namespace mqtt {
     class Service : public Thread {
     public:
