@@ -368,8 +368,7 @@ namespace mqtt {
             uint8_t *data;
             unsigned length;
         };
-        struct OutputStream : public InputStream {
-            unsigned consumed;
+        struct OutputStream : InputStream {
             bool disconnect;
         };
         using EventHandler = std::function<void(const Event &connection, const InputStream &input, OutputStream &output)>;
@@ -558,7 +557,7 @@ namespace mqtt {
                         instance->enabled = false;
                         break;
                     }
-                    int bytes = recv(sock, reinterpret_cast<char *>(&input.data[input.length]), TCPSERVER_RECV_BUFFER_LENGTH - input.length, 0);
+                    int bytes = recv(sock, reinterpret_cast<char *>(input.data), TCPSERVER_RECV_BUFFER_LENGTH, 0);
 #ifdef _WIN32
                     if ((bytes == 0) || ((bytes == TCPSERVER_SOCKET_ERROR) && (WSAGetLastError() != WSAEWOULDBLOCK))) {
 #else
@@ -570,12 +569,11 @@ namespace mqtt {
                             break;
                         }
                     }
-                    input.length += (bytes != TCPSERVER_SOCKET_ERROR) ? bytes : 0;
+                    input.length = (bytes != TCPSERVER_SOCKET_ERROR) ? bytes : 0;
                     try {
-                        output.consumed = input.length; output.disconnect = false;
+                        output.disconnect = false;
                         handler(event, input, output);
-                        std::memcpy(input.data, &input.data[output.consumed], input.length - output.consumed);
-                        input.length -= output.consumed;
+                        input.length = 0;
                     } catch (...) {
                         instance->enabled = false;
                         break;
@@ -594,7 +592,7 @@ namespace mqtt {
                     delete[] output.data; output.data = nullptr; output.length = 0;
                 }
                 try {
-                    output.consumed = input.length; output.disconnect = true;
+                    output.disconnect = true;
                     handler(event, input, output);
                     if (output.data != nullptr) {
                         delete[] output.data;
