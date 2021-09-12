@@ -1,5 +1,5 @@
 EXECUTABLE = mqtt_service
-PRODUCT_NAME = MQTT Service
+PRODUCT_NAME = Light MQTT Service
 PRODUCT_VERSION = 0.9.0.1
 FLAGS = -Wall -O3 -std=c++11
 
@@ -15,6 +15,7 @@ install: $(EXECUTABLE)
 	install $(EXECUTABLE) /usr/sbin
 	cp mqtt_service.service /lib/systemd/system
 	sed -i 's/{EXECUTABLE}/$(EXECUTABLE)/g' /lib/systemd/system/mqtt_service.service
+	sed -i 's/{PRODUCT_NAME}/$(PRODUCT_NAME)/g' /lib/systemd/system/mqtt_service.service
 	ln -s /lib/systemd/system/mqtt_service.service /etc/systemd/system/mqtt_service.service
 
 mqtt_service.o: mqtt_service.cpp

@@ -1,5 +1,5 @@
 [Unit]
-Description=MQTT Service
+Description={PRODUCT_NAME}
 Documentation=https://www.github.com/markondej/mqtt_service
 After=network.target
 
