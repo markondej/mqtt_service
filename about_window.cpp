@@ -84,7 +84,7 @@ LRESULT AboutWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexc
 
         hDefaultFont = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 
-        hProductName = CreateWindowEx(0, "STATIC", (productInfo.GetName() + ", Version " + productInfo.GetVersion()).c_str(), WS_CHILD | WS_VISIBLE, GetScaled(112), GetScaled(23, false),
+        hProductName = CreateWindowEx(0, "STATIC", (productInfo.GetName() + ", Version " + productInfo.GetVersion()).c_str(), WS_CHILD | WS_VISIBLE, GetScaled(112), GetScaled(22, false),
             clientArea.right - GetScaled(126), GetScaled(20, false), hWnd, reinterpret_cast<HMENU>(ID_ABOUT_LABEL_PRODUCT_NAME), hInstance, nullptr);
         if (hProductName == NULL) {
             return -1;

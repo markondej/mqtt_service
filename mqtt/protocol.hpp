@@ -72,7 +72,7 @@ namespace mqtt {
         virtual ~Server();
         Server &operator=(const Server &) = delete;
         void Enable(const std::string &address, uint16_t port, uint32_t maxConn = 64);
-        void Disable();
+        void Disable() noexcept;
         bool IsEnabled() const;
         void SetConnectHandler(const ConnectHandler &handler);
         void SetDisconnectHandler(const DisconnectHandler &handler);

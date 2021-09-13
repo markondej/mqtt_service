@@ -1,9 +1,8 @@
 EXECUTABLE = mqtt_service
 PRODUCT_NAME = Light MQTT Service
-PRODUCT_VERSION = 0.9.0.1
+PRODUCT_VERSION = 0.9.1.0
 FLAGS = -Wall -O3 -std=c++11
 
-SERVICE_DEFINES = -DSERVICE_PRODUCT_NAME="\"$(PRODUCT_NAME)\"" -DSERVICE_PRODUCT_VERSION="\"$(PRODUCT_VERSION)\""
 ifeq ($(QUEUE), 1)
 	SERVICE_DEFINES += -DSERVICE_OPERATION_MODE_QUEUE
 endif
@@ -19,10 +18,10 @@ install: $(EXECUTABLE)
 	ln -s /lib/systemd/system/mqtt_service.service /etc/systemd/system/mqtt_service.service
 
 mqtt_service.o: mqtt_service.cpp
-	g++ $(FLAGS) $(SERVICE_DEFINES) -c mqtt_service.cpp
+	g++ $(FLAGS) -DPRODUCT_NAME="\"$(PRODUCT_NAME)\"" -DPRODUCT_VERSION="\"$(PRODUCT_VERSION)\"" -c mqtt_service.cpp
 
 service.o: mqtt/service.cpp
-	g++ $(FLAGS) -c mqtt/service.cpp
+	g++ $(FLAGS) $(SERVICE_DEFINES) -c mqtt/service.cpp
 
 protocol.o: mqtt/protocol.cpp
 	g++ $(FLAGS) -c mqtt/protocol.cpp

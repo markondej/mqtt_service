@@ -46,8 +46,8 @@ int main(int argc, char** argv)
     WPARAM result = 1;
 #endif
 
-    Console console;
     try {
+        Console console;
         service = std::shared_ptr<mqtt::Service>(new mqtt::Service(address, port, [&](const std::exception &exception) {
 #ifndef _WIN32
             console.Print(exception.what());
