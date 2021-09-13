@@ -805,7 +805,6 @@ namespace mqtt {
                 connection->timestamp = timestamp;
             }
             connection->input = updated.input;
-            connection->output = updated.output;
         }
         Connection Delete(uint64_t connectionId) {
             std::lock_guard<std::mutex> lock(access);
@@ -822,7 +821,7 @@ namespace mqtt {
             std::lock_guard<std::mutex> lock(access);
             for (Connection &connection : connections) {
                 if (connection.id == connectionId) {
-                    connection.output.insert(connection.output.begin(), data.begin(), data.end());
+                    connection.output.insert(connection.output.end(), data.begin(), data.end());
                     return;
                 }
             }
@@ -946,7 +945,7 @@ namespace mqtt {
         reinterpret_cast<TCPServer *>(server)->Enable(address, port, maxConn);
     }
 
-    void Server::Disable()
+    void Server::Disable() noexcept
     {
         reinterpret_cast<TCPServer *>(server)->Disable();
     }

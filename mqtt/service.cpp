@@ -80,6 +80,14 @@ namespace mqtt {
             }
             throw std::runtime_error("Client does not exist");
         }
+        std::vector<std::pair<uint64_t, unsigned long long>> GetAvailablePacketsCount() {
+            std::vector<std::pair<uint64_t, unsigned long long>> available;
+            std::lock_guard<std::mutex> lock(access);
+            for (Client &client : clients) {
+                available.push_back({ client.connectionId, SERVICE_PUBLISHED_PACKETS_LIMIT - client.packetIds.size() });
+            }
+            return available;
+        }
         std::pair<uint16_t, uint16_t> AddPacket(uint64_t connectionId) {
             std::lock_guard<std::mutex> lock(access);
             auto getNextPacketId = [&](Client &client) -> uint16_t {
@@ -100,12 +108,9 @@ namespace mqtt {
             };
             for (Client &client : clients) {
                 if (client.connectionId == connectionId) {
-                    if (client.packetIds.size() < SERVICE_PUBLISHED_PACKETS_LIMIT) {
-                        uint16_t packetId = getNextPacketId(client);
-                        client.packetIds.push_back(packetId);
-                        return { packetId, client.keepAlive };
-                    }
-                    break;
+                    uint16_t packetId = getNextPacketId(client);
+                    client.packetIds.push_back(packetId);
+                    return { packetId, client.keepAlive };
                 }
             }
             throw std::runtime_error("Client does not exist");
@@ -152,7 +157,7 @@ namespace mqtt {
             std::vector<Subscription> subscriptions;
             std::vector<Payload> payloads;
         };
-        Topics() { }
+        Topics() : topicIdSeq(0) { }
         Topics(const Topics &) = delete;
         Topics(Topics &&) = delete;
         Topics &operator=(const Topics &) = delete;
@@ -173,7 +178,7 @@ namespace mqtt {
             if (topics.size() >= SERVICE_TOPICS_LIMIT) {
                 std::runtime_error("Topics limit exceeded");
             }
-            topics.push_back({ ++topicSequence, topicName, { { connectionId, requestedQoS } } });
+            topics.push_back({ topicIdSeq++, topicName, { { connectionId, requestedQoS } } });
         }
         void Unsubscribe(uint64_t connectionId, const std::string &topicName) {
             std::lock_guard<std::mutex> lock(access);
@@ -195,8 +200,7 @@ namespace mqtt {
             std::vector<std::string> unsubscribed;
             std::lock_guard<std::mutex> lock(access);
             for (Topic &topic : topics) {
-                auto subscription = topic.subscriptions.begin();
-                while (subscription != topic.subscriptions.end()) {
+                for (auto subscription = topic.subscriptions.begin(); subscription != topic.subscriptions.end();) {
                     if (subscription->connectionId == connectionId) {
                         subscription = topic.subscriptions.erase(subscription);
                         unsubscribed.push_back(topic.name);
@@ -204,24 +208,22 @@ namespace mqtt {
                     }
                     subscription++;
                 }
-                if (subscription != topic.subscriptions.end()) {
-                    for (Topic::Payload &payload : topic.payloads) {
-                        if (!payload.assigned || payload.recipients.empty()) {
+                for (Topic::Payload &payload : topic.payloads) {
+                    if (!payload.assigned || payload.recipients.empty()) {
+                        continue;
+                    }
+                    for (auto recipient = payload.recipients.begin(); recipient != payload.recipients.end();) {
+                        if (recipient->connectionId == connectionId) {
+                            recipient = payload.recipients.erase(recipient);
                             continue;
                         }
-                        for (auto recipient = payload.recipients.begin(); recipient != payload.recipients.end();) {
-                            if (recipient->connectionId == connectionId) {
-                                recipient = payload.recipients.erase(recipient);
-                                continue;
-                            }
-                            recipient++;
-                        }
-#ifdef SERVICE_OPERATION_MODE_QUEUE
-                        if (payload.recipients.empty()) {
-                            payload.assigned = false;
-                        }
-#endif
+                        recipient++;
                     }
+#ifdef SERVICE_OPERATION_MODE_QUEUE
+                    if (payload.recipients.empty()) {
+                        payload.assigned = false;
+                    }
+#endif
                 }
             }
             return unsubscribed;
@@ -240,7 +242,7 @@ namespace mqtt {
             if (topics.size() >= SERVICE_TOPICS_LIMIT) {
                 throw std::runtime_error("Topics limit exceeded");
             }
-            topics.push_back({ ++topicSequence, topicName, std::vector<Topic::Subscription>(), { { payload, requestedQoS } } });
+            topics.push_back({ topicIdSeq++, topicName, std::vector<Topic::Subscription>(), { { payload, requestedQoS } } });
         }
         unsigned long long Count() {
             std::lock_guard<std::mutex> lock(access);
@@ -248,6 +250,7 @@ namespace mqtt {
         }
         std::vector<PublishedPacket> PublishPackets(Clients &clients) {
             std::vector<PublishedPacket> packets;
+            auto available = clients.GetAvailablePacketsCount();
             std::lock_guard<std::mutex> lock(access);
             for (Topic &topic : topics) {
                 if (topic.payloads.empty()) {
@@ -259,8 +262,7 @@ namespace mqtt {
                         payload.recipients = topic.subscriptions;
 #else
                     if (!payload.assigned && !topic.subscriptions.empty()) {
-                        Topic::Subscription subscription = topic.subscriptions[rand() % topic.subscriptions.size()];
-                        payload.recipients.push_back(subscription);
+                        payload.recipients.push_back(topic.subscriptions[rand() % topic.subscriptions.size()]);
 #endif
                         payload.assigned = true;
                     }
@@ -271,11 +273,26 @@ namespace mqtt {
                         continue;
                     }
                     for (auto recipient = payload->recipients.begin(); recipient != payload->recipients.end();) {
-                        try {
-                            auto added = clients.AddPacket(recipient->connectionId);
-                            packets.push_back({ recipient->connectionId, topic.id, added.first, added.second, std::min(recipient->requestedQoS, payload->requestedQoS), payload->requestedQoS, topic.name, payload->data, PublishedPacket::Status::Added });
-                            recipient = payload->recipients.erase(recipient);
-                        } catch (...) {
+                        auto verify = available.begin();
+                        while (verify != available.end()) {
+                            if (verify->first == recipient->connectionId) {
+                                if (!verify->second) {
+                                    recipient++;
+                                    break;
+                                }
+                                try {
+                                    auto added = clients.AddPacket(recipient->connectionId);
+                                    packets.push_back({ recipient->connectionId, topic.id, added.first, added.second, std::min(recipient->requestedQoS, payload->requestedQoS), payload->requestedQoS, topic.name, payload->data, PublishedPacket::Status::Added });
+                                    recipient = payload->recipients.erase(recipient);
+                                    verify->second--;
+                                } catch (...) {
+                                    recipient++;
+                                }
+                                break;
+                            }
+                            verify++;
+                        }
+                        if (verify == available.end()) {
                             recipient++;
                         }
                     }
@@ -302,7 +319,7 @@ namespace mqtt {
             return false;
         }
     private:
-        uint32_t topicSequence = 0;
+        uint32_t topicIdSeq;
         std::vector<Topic> topics;
         std::mutex access;
     };
@@ -327,11 +344,18 @@ namespace mqtt {
             }
             throw std::runtime_error("Bad packet identifier");
         }
+#ifndef SERVICE_OPERATION_MODE_QUEUE
         std::vector<uint16_t> RemoveAll(uint64_t connectionId) {
+#else
+        std::vector<uint16_t> RemoveAll(uint64_t connectionId, Topics &topics) {
+#endif
             std::vector<uint16_t> removed;
             std::lock_guard<std::mutex> lock(access);
             for (auto packet = packets.begin(); packet != packets.end();) {
                 if (packet->connectionId == connectionId) {
+#ifdef SERVICE_OPERATION_MODE_QUEUE
+                    topics.Publish(packet->topicName, packet->data, packet->requestedQoS);
+#endif
                     removed.push_back(packet->packetId);
                     packet = packets.erase(packet);
                     continue;
@@ -351,6 +375,7 @@ namespace mqtt {
                     packet->status = status;
                     return;
                 }
+                packet++;
             }
             throw std::runtime_error("Bad packet identifier");
         }
@@ -369,17 +394,17 @@ namespace mqtt {
             std::vector<std::pair<uint64_t, uint16_t>> handled;
             std::lock_guard<std::mutex> lock(access);
             for (auto packet = packets.begin(); packet != packets.end();) {
+                bool success = false;
                 auto now = std::chrono::system_clock::now();
                 try {
                     bool resend = false;
                     if ((packet->status != PublishedPacket::Status::Added) && (std::chrono::duration_cast<std::chrono::seconds>(now - packet->timestamp).count() > packet->timeout)) {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
                         if (!topics.IsSubscribed(packet->connectionId, packet->topicId)) {
-                            throw std::runtime_error("Unsubscribed");
+                            throw NoPacketException();
                         }
                         resend = true;
 #else
-                        topics.Publish(packet->topicName, packet->data, packet->requestedQoS);
                         throw std::runtime_error("Timeout");
 #endif
                     }
@@ -388,12 +413,20 @@ namespace mqtt {
                         packet->status = PublishedPacket::Status::Sent;
                         packet->timestamp = now;
                         if (!packet->selectedQoS) {
-                            handled.push_back({ packet->connectionId, packet->packetId });
-                            packet = packets.erase(packet);
-                            continue;
+                            success = true;
                         }
                     }
+#ifndef SERVICE_OPERATION_MODE_QUEUE
                 } catch (...) {
+#else
+                } catch (NoPacketException &) {
+                    success = true;
+                } catch (...) {
+                    topics.Publish(packet->topicName, packet->data, packet->requestedQoS);
+#endif
+                    success = true;
+                }
+                if (success) {
                     handled.push_back({ packet->connectionId, packet->packetId });
                     packet = packets.erase(packet);
                     continue;
@@ -529,7 +562,11 @@ namespace mqtt {
                 for (std::string &topicName : topics.UnsubscribeAll(connectionId)) {
                     print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] unsubscribed from \"" + topicName + "\"");
                 }
+#ifndef SERVICE_OPERATION_MODE_QUEUE
                 for (uint16_t packetId : published.RemoveAll(connectionId)) {
+#else
+                for (uint16_t packetId : published.RemoveAll(connectionId, topics)) {
+#endif
                     clients.RemovePacket(connectionId, packetId);
                 }
                 requests.Unregister(connectionId);
@@ -638,27 +675,34 @@ namespace mqtt {
                 instance->closed = true;;
             }
         });
-        auto statusTimestamp = std::chrono::system_clock::now();
-        unsigned long long publishedCount = 0;
-        while (!instance->closed) {
-            bool active = false;
-            auto packets = topics.PublishPackets(clients);
-            publishedCount += packets.size();
-            published.Append(packets);
-            for (auto handled : published.Handle(topics, server)) {
-                clients.RemovePacket(handled.first, handled.second);
-                active = true;
+
+        try {
+            auto statusTimestamp = std::chrono::system_clock::now();
+            unsigned long long publishedCount = 0;
+            while (!instance->closed) {
+                bool active = false;
+                auto packets = topics.PublishPackets(clients);
+                publishedCount += packets.size();
+
+                published.Append(packets);
+                for (auto handled : published.Handle(topics, server)) {
+                    clients.RemovePacket(handled.first, handled.second);
+                    active = true;
+                }
+                auto now = std::chrono::system_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - statusTimestamp).count() >= SERVICE_STATUS_INTERVAL) {
+                    print("Status: [topics:" + std::to_string(topics.Count()) + ", clients:" + std::to_string(clients.Count()) + ", processed:" + std::to_string(publishedCount) + "]");
+                    statusTimestamp = now;
+                    publishedCount = 0;
+                }
+                requests.HandleExpired();
+                if (packets.empty() && !active) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(SERVICE_NOP_DELAY));
+                }
             }
-            auto now = std::chrono::system_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - statusTimestamp).count() >= SERVICE_STATUS_INTERVAL) {
-                print("Status: [topics:" + std::to_string(topics.Count()) + ", clients:" + std::to_string(clients.Count()) + ", processed:" + std::to_string(publishedCount) + "]");
-                statusTimestamp = now;
-                publishedCount = 0;
-            }
-            requests.HandleExpired();
-            if (packets.empty() && !active) {
-                std::this_thread::sleep_for(std::chrono::microseconds(SERVICE_NOP_DELAY));
-            }
+        } catch (std::exception &exception) {
+            instance->handleException(exception);
+            instance->closed = true;;
         }
         server.Disable();
         serverThread.join();

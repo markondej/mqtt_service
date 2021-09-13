@@ -12,7 +12,7 @@ public:
     Thread(Thread &&) = delete;
     Thread &operator=(const Thread &) = delete;
     virtual ~Thread();
-    void Close();
+    void Close() noexcept;
     bool IsClosed() const;
 protected:
     std::thread thread;

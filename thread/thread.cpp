@@ -9,7 +9,7 @@ Thread::~Thread()
 {
 }
 
-void Thread::Close()
+void Thread::Close() noexcept
 {
     closed = true;
     if (thread.joinable()) {
