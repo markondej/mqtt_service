@@ -873,9 +873,8 @@ namespace mqtt {
     }
 
     Server::Server()
+        : server(reinterpret_cast<void *>(new TCPServer())), connections(reinterpret_cast<void *>(new Connections()))
     {
-        server = reinterpret_cast<void *>(new TCPServer());
-        connections = reinterpret_cast<void *>(new Connections());
         reinterpret_cast<TCPServer *>(server)->SetHandler([&](const TCPServer::Event &event, const TCPServer::InputStream &input, TCPServer::OutputStream &output) {
             Connections *connections = reinterpret_cast<Connections *>(this->connections);
             bool connected = false, handled = false;
@@ -1146,7 +1145,9 @@ namespace mqtt {
                 }
                 std::vector<uint8_t> payload;
                 payload.resize(packet.GetData().size() - offset);
-                std::memcpy(payload.data(), &packet.GetData()[offset], packet.GetData().size() - offset);
+                if (payload.size()) {
+                    std::memcpy(payload.data(), &packet.GetData()[offset], payload.size());
+                }
                 if (flags.qos1 && flags.qos2) {
                     throw DisconnectException("PUBLISH: invalid QoS value");
                 }
