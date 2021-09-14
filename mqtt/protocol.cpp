@@ -795,7 +795,7 @@ namespace mqtt {
                 connection++;
             }
             if (connection == connections.end()) {
-                throw std::runtime_error("Bad connection identifier");
+                throw std::runtime_error("Incorrect connection identifier");
             }
             if (packetHandled) {
                 if (connected) {
@@ -815,7 +815,7 @@ namespace mqtt {
                     return deleted;
                 }
             }
-            throw std::runtime_error("Bad connection identifier");
+            throw std::runtime_error("Incorrect connection identifier");
         }
         void Send(uint64_t connectionId, const std::vector<uint8_t> &data) {
             std::lock_guard<std::mutex> lock(access);
@@ -825,7 +825,7 @@ namespace mqtt {
                     return;
                 }
             }
-            throw std::runtime_error("Bad connection identifier");
+            throw std::runtime_error("Incorrect connection identifier");
         }
         AddressIP GetAddress(uint64_t connectionId) {
             std::lock_guard<std::mutex> lock(access);
@@ -834,7 +834,7 @@ namespace mqtt {
                     return connection.address;
                 }
             }
-            throw std::runtime_error("Bad connection identifier");
+            throw std::runtime_error("Incorrect connection identifier");
         }
     private:
         std::mutex access;

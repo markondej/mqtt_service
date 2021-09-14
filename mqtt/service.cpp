@@ -9,11 +9,14 @@
 #ifndef SERVICE_PAYLOAD_SIZE_LIMIT
 #define SERVICE_PAYLOAD_SIZE_LIMIT 32 * 1024 * 1024
 #endif
-#ifndef SERVICE_PUBLISHED_PACKETS_LIMIT
-#define SERVICE_PUBLISHED_PACKETS_LIMIT USHRT_MAX
+#ifndef SERVICE_PAYLOADS_LIMIT
+#define SERVICE_PAYLOADS_LIMIT USHRT_MAX
 #endif
-#ifndef SERVICE_TOPIC_PAYLOADS_LIMIT
-#define SERVICE_TOPIC_PAYLOADS_LIMIT USHRT_MAX
+#ifndef SERVICE_RECEIVED_PAYLOADS_LIMIT
+#define SERVICE_RECEIVED_PAYLOADS_LIMIT USHRT_MAX
+#endif
+#ifndef SERVICE_PUBLISHED_PAYLOADS_LIMIT
+#define SERVICE_PUBLISHED_PAYLOADS_LIMIT USHRT_MAX
 #endif
 #ifndef SERVICE_DEFAULT_KEEP_ALIVE_TIME
 #define SERVICE_DEFAULT_KEEP_ALIVE_TIME 60
@@ -23,13 +26,24 @@
 #define SERVICE_NOP_DELAY 1000
 
 namespace mqtt {
-    struct PublishedPacket {
-        uint64_t connectionId;
-        uint32_t topicId;
-        uint16_t packetId, timeout;
-        uint8_t selectedQoS, requestedQoS;
+    struct Payload {
+        struct Recipient {
+            uint64_t connectionId;
+            uint8_t requestedQoS;
+        };
         std::string topicName;
         std::vector<uint8_t> data;
+        uint8_t requestedQoS;
+        std::vector<Recipient> recipients;
+        bool assigned;
+    };
+
+    struct PublishedPayload {
+        std::string topicName;
+        std::vector<uint8_t> data;
+        uint64_t connectionId;
+        uint16_t packetId, timeout;
+        uint8_t requestedQoS, selectedQoS;
         enum class Status {
             Added,
             Sent,
@@ -37,6 +51,8 @@ namespace mqtt {
         } status;
         std::chrono::time_point<std::chrono::system_clock> timestamp;
     };
+
+    using RepublishHandler = std::function<void(const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS) noexcept>;
 
     class Clients {
     public:
@@ -66,7 +82,7 @@ namespace mqtt {
                     throw std::runtime_error("Duplicated connection identifier");
                 }
             }
-            clients.push_back({ connectionId, keepAlive ? keepAlive : static_cast<uint16_t>(SERVICE_DEFAULT_KEEP_ALIVE_TIME), USHRT_MAX, clientId });
+            clients.push_back({ connectionId, keepAlive ? keepAlive : static_cast<uint16_t>(SERVICE_DEFAULT_KEEP_ALIVE_TIME), 0, clientId });
             return *std::prev(clients.end());
         }
         void Delete(uint64_t connectionId) {
@@ -84,7 +100,7 @@ namespace mqtt {
             std::vector<std::pair<uint64_t, unsigned long long>> available;
             std::lock_guard<std::mutex> lock(access);
             for (Client &client : clients) {
-                available.push_back({ client.connectionId, SERVICE_PUBLISHED_PACKETS_LIMIT - client.packetIds.size() });
+                available.push_back({ client.connectionId, SERVICE_PUBLISHED_PAYLOADS_LIMIT - client.packetIds.size() });
             }
             return available;
         }
@@ -92,6 +108,9 @@ namespace mqtt {
             std::lock_guard<std::mutex> lock(access);
             auto getNextPacketId = [&](Client &client) -> uint16_t {
                 for (uint16_t packetId = client.packetIdSeq + 1; packetId != client.packetIdSeq; packetId++) {
+                    if (!packetId) {
+                        packetId++;
+                    }
                     auto id = client.packetIds.begin();
                     while (id != client.packetIds.end()) {
                         if (*id == packetId) {
@@ -141,23 +160,7 @@ namespace mqtt {
 
     class Topics {
     public:
-        struct Topic {
-            uint32_t id;
-            struct Subscription {
-                uint64_t connectionId;
-                uint8_t requestedQoS;
-            };
-            struct Payload {
-                std::vector<uint8_t> data;
-                uint8_t requestedQoS;
-                std::vector<Subscription> recipients;
-                bool assigned;
-            };
-            std::string name;
-            std::vector<Subscription> subscriptions;
-            std::vector<Payload> payloads;
-        };
-        Topics() : topicIdSeq(0) { }
+        Topics() { }
         Topics(const Topics &) = delete;
         Topics(Topics &&) = delete;
         Topics &operator=(const Topics &) = delete;
@@ -165,7 +168,7 @@ namespace mqtt {
             std::lock_guard<std::mutex> lock(access);
             for (Topic &topic : topics) {
                 if (topic.name == topicName) {
-                    for (Topic::Subscription &subscription : topic.subscriptions) {
+                    for (auto &subscription : topic.subscriptions) {
                         if (subscription.connectionId == connectionId) {
                             subscription.requestedQoS = requestedQoS;
                             return;
@@ -178,7 +181,7 @@ namespace mqtt {
             if (topics.size() >= SERVICE_TOPICS_LIMIT) {
                 std::runtime_error("Topics limit exceeded");
             }
-            topics.push_back({ topicIdSeq++, topicName, { { connectionId, requestedQoS } } });
+            topics.push_back({ topicName, { { connectionId, requestedQoS } } });
         }
         void Unsubscribe(uint64_t connectionId, const std::string &topicName) {
             std::lock_guard<std::mutex> lock(access);
@@ -208,108 +211,26 @@ namespace mqtt {
                     }
                     subscription++;
                 }
-                for (Topic::Payload &payload : topic.payloads) {
-                    if (!payload.assigned || payload.recipients.empty()) {
-                        continue;
-                    }
-                    for (auto recipient = payload.recipients.begin(); recipient != payload.recipients.end();) {
-                        if (recipient->connectionId == connectionId) {
-                            recipient = payload.recipients.erase(recipient);
-                            continue;
-                        }
-                        recipient++;
-                    }
-#ifdef SERVICE_OPERATION_MODE_QUEUE
-                    if (payload.recipients.empty()) {
-                        payload.assigned = false;
-                    }
-#endif
-                }
             }
             return unsubscribed;
-        }
-        void Publish(const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS) {
-            std::lock_guard<std::mutex> lock(access);
-            for (Topic &topic : topics) {
-                if (topic.name == topicName) {
-                    if (topic.payloads.size() >= SERVICE_TOPIC_PAYLOADS_LIMIT) {
-                        throw std::runtime_error("Topic payloads limit exceeded");
-                    }
-                    topic.payloads.push_back({ payload, requestedQoS });
-                    return;
-                }
-            }
-            if (topics.size() >= SERVICE_TOPICS_LIMIT) {
-                throw std::runtime_error("Topics limit exceeded");
-            }
-            topics.push_back({ topicIdSeq++, topicName, std::vector<Topic::Subscription>(), { { payload, requestedQoS } } });
         }
         unsigned long long Count() {
             std::lock_guard<std::mutex> lock(access);
             return topics.size();
         }
-        std::vector<PublishedPacket> PublishPackets(Clients &clients) {
-            std::vector<PublishedPacket> packets;
-            auto available = clients.GetAvailablePacketsCount();
+        std::vector<std::pair<std::string, std::vector<Payload::Recipient>>> GetSubscriptions() {
+            std::vector<std::pair<std::string, std::vector<Payload::Recipient>>> subscriptions;
             std::lock_guard<std::mutex> lock(access);
             for (Topic &topic : topics) {
-                if (topic.payloads.empty()) {
-                    continue;
-                }
-                for (Topic::Payload &payload : topic.payloads) {
-#ifndef SERVICE_OPERATION_MODE_QUEUE
-                    if (!payload.assigned) {
-                        payload.recipients = topic.subscriptions;
-#else
-                    if (!payload.assigned && !topic.subscriptions.empty()) {
-                        payload.recipients.push_back(topic.subscriptions[rand() % topic.subscriptions.size()]);
-#endif
-                        payload.assigned = true;
-                    }
-                }
-                for (auto payload = topic.payloads.begin(); payload != topic.payloads.end();) {
-                    if (!payload->assigned) {
-                        payload++;
-                        continue;
-                    }
-                    for (auto recipient = payload->recipients.begin(); recipient != payload->recipients.end();) {
-                        auto verify = available.begin();
-                        while (verify != available.end()) {
-                            if (verify->first == recipient->connectionId) {
-                                if (!verify->second) {
-                                    recipient++;
-                                    break;
-                                }
-                                try {
-                                    auto added = clients.AddPacket(recipient->connectionId);
-                                    packets.push_back({ recipient->connectionId, topic.id, added.first, added.second, std::min(recipient->requestedQoS, payload->requestedQoS), payload->requestedQoS, topic.name, payload->data, PublishedPacket::Status::Added });
-                                    recipient = payload->recipients.erase(recipient);
-                                    verify->second--;
-                                } catch (...) {
-                                    recipient++;
-                                }
-                                break;
-                            }
-                            verify++;
-                        }
-                        if (verify == available.end()) {
-                            recipient++;
-                        }
-                    }
-                    if (payload->recipients.empty()) {
-                        payload = topic.payloads.erase(payload);
-                        continue;
-                    }
-                    payload++;
-                }
+                subscriptions.push_back({ topic.name, topic.subscriptions });
             }
-            return packets;
-        };
-        bool IsSubscribed(uint64_t connectionId, uint32_t topicId) {
+            return subscriptions;
+        }
+        bool IsSubscribed(uint64_t connectionId, const std::string &topicName) {
             std::lock_guard<std::mutex> lock(access);
             for (Topic &topic : topics) {
-                if (topic.id == topicId) {
-                    for (Topic::Subscription &subscription : topic.subscriptions) {
+                if (topic.name == topicName) {
+                    for (auto &subscription : topic.subscriptions) {
                         if (subscription.connectionId == connectionId) {
                             return true;
                         }
@@ -319,88 +240,96 @@ namespace mqtt {
             return false;
         }
     private:
-        uint32_t topicIdSeq;
+        struct Topic {
+            std::string name;
+            std::vector<Payload::Recipient> subscriptions;
+        };
         std::vector<Topic> topics;
         std::mutex access;
     };
 
-    class PublishedPackets {
+    class PublishedPayloads {
     public:
-        PublishedPackets() { }
-        PublishedPackets(const PublishedPackets &) = delete;
-        PublishedPackets(PublishedPackets &&) = delete;
-        PublishedPackets &operator=(const PublishedPackets &) = delete;
-        void Remove(uint64_t connectionId, uint16_t packetId, uint8_t requiredQoS, PublishedPacket::Status requiredStatus) {
+        PublishedPayloads() { }
+        PublishedPayloads(const PublishedPayloads &) = delete;
+        PublishedPayloads(PublishedPayloads &&) = delete;
+        PublishedPayloads &operator=(const PublishedPayloads &) = delete;
+        void Remove(uint64_t connectionId, uint16_t packetId, uint8_t requiredQoS, PublishedPayload::Status requiredStatus) {
             std::lock_guard<std::mutex> lock(access);
-            for (auto packet = packets.begin(); packet != packets.end();) {
-                if ((packet->connectionId == connectionId) && (packet->packetId == packetId)) {
-                    if ((packet->selectedQoS != requiredQoS) || (packet->status != requiredStatus)) {
-                        throw std::runtime_error("Bad QoS or packet status");
+            for (auto payload = payloads.begin(); payload != payloads.end();) {
+                if ((payload->connectionId == connectionId) && (payload->packetId == packetId)) {
+                    if ((payload->selectedQoS != requiredQoS) || (payload->status != requiredStatus)) {
+                        throw std::runtime_error("Incorrect QoS or payload status");
                     }
-                    packet = packets.erase(packet);
+                    payload = payloads.erase(payload);
                     return;
                 }
-                packet++;
+                payload++;
             }
-            throw std::runtime_error("Bad packet identifier");
+            throw std::runtime_error("Incorrect packet identifier");
         }
 #ifndef SERVICE_OPERATION_MODE_QUEUE
         std::vector<uint16_t> RemoveAll(uint64_t connectionId) {
 #else
-        std::vector<uint16_t> RemoveAll(uint64_t connectionId, Topics &topics) {
+        std::vector<uint16_t> RemoveAll(uint64_t connectionId, const RepublishHandler &republish) {
 #endif
             std::vector<uint16_t> removed;
             std::lock_guard<std::mutex> lock(access);
-            for (auto packet = packets.begin(); packet != packets.end();) {
-                if (packet->connectionId == connectionId) {
+            for (auto payload = payloads.begin(); payload != payloads.end();) {
+                if (payload->connectionId == connectionId) {
 #ifdef SERVICE_OPERATION_MODE_QUEUE
-                    topics.Publish(packet->topicName, packet->data, packet->requestedQoS);
+                    try {
+                        republish(payload->topicName, payload->data, payload->requestedQoS);
+                    } catch (...) { }
 #endif
-                    removed.push_back(packet->packetId);
-                    packet = packets.erase(packet);
+                    removed.push_back(payload->packetId);
+                    payload = payloads.erase(payload);
                     continue;
                 }
-                packet++;
+                payload++;
             }
             return removed;
         }
-        void UpdateStatus(uint64_t connectionId, uint16_t packetId, uint8_t requiredQoS, PublishedPacket::Status requiredStatus, PublishedPacket::Status status) {
+        void UpdateStatus(uint64_t connectionId, uint16_t packetId, uint8_t requiredQoS, PublishedPayload::Status requiredStatus, PublishedPayload::Status status) {
             std::lock_guard<std::mutex> lock(access);
-            for (auto packet = packets.begin(); packet != packets.end();) {
-                if ((packet->packetId == packetId) && (packet->connectionId == connectionId)) {
-                    if ((packet->selectedQoS != requiredQoS) || (packet->status != requiredStatus)) {
-                        throw std::runtime_error("Bad QoS or packet status");
+            for (auto &payload : payloads) {
+                if ((payload.packetId == packetId) && (payload.connectionId == connectionId)) {
+                    if ((payload.selectedQoS != requiredQoS) || (payload.status != requiredStatus)) {
+                        throw std::runtime_error("Incorrect QoS or payload status");
                     }
-                    packet->timestamp = std::chrono::system_clock::now();
-                    packet->status = status;
+                    payload.timestamp = std::chrono::system_clock::now();
+                    payload.status = status;
                     return;
                 }
-                packet++;
             }
-            throw std::runtime_error("Bad packet identifier");
+            throw std::runtime_error("Incorrect packet identifier");
         }
         unsigned long long Count() {
             std::lock_guard<std::mutex> lock(access);
-            return packets.size();
+            return payloads.size();
         }
-        void Append(const std::vector<PublishedPacket> &packets) {
-            if (packets.empty()) {
+        void Append(const std::vector<PublishedPayload> &payloads) {
+            if (payloads.empty()) {
                 return;
             }
             std::lock_guard<std::mutex> lock(access);
-            this->packets.insert(this->packets.end(), packets.begin(), packets.end());
+            this->payloads.insert(this->payloads.end(), payloads.begin(), payloads.end());
         }
+#ifndef SERVICE_OPERATION_MODE_QUEUE
         std::vector<std::pair<uint64_t, uint16_t>> Handle(Topics &topics, Server &server) {
-            std::vector<std::pair<uint64_t, uint16_t>> handled;
+#else
+        std::vector<std::pair<uint64_t, uint16_t>> Handle(Topics &topics, Server &server, const RepublishHandler &republish) {
+#endif
+        std::vector<std::pair<uint64_t, uint16_t>> handled;
             std::lock_guard<std::mutex> lock(access);
-            for (auto packet = packets.begin(); packet != packets.end();) {
+            for (auto payload = payloads.begin(); payload != payloads.end();) {
                 bool success = false;
                 auto now = std::chrono::system_clock::now();
                 try {
                     bool resend = false;
-                    if ((packet->status != PublishedPacket::Status::Added) && (std::chrono::duration_cast<std::chrono::seconds>(now - packet->timestamp).count() > packet->timeout)) {
+                    if ((payload->status != PublishedPayload::Status::Added) && (std::chrono::duration_cast<std::chrono::seconds>(now - payload->timestamp).count() > payload->timeout)) {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
-                        if (!topics.IsSubscribed(packet->connectionId, packet->topicId)) {
+                        if (!topics.IsSubscribed(payload->connectionId, payload->topicName)) {
                             throw NoPacketException();
                         }
                         resend = true;
@@ -408,11 +337,11 @@ namespace mqtt {
                         throw std::runtime_error("Timeout");
 #endif
                     }
-                    if ((packet->status == PublishedPacket::Status::Added) || resend) {
-                        server.Publish(packet->connectionId, packet->packetId, packet->topicName, packet->data, { resend, static_cast<bool>(packet->selectedQoS & 0x1), static_cast<bool>(packet->selectedQoS & 0x2), false });
-                        packet->status = PublishedPacket::Status::Sent;
-                        packet->timestamp = now;
-                        if (!packet->selectedQoS) {
+                    if ((payload->status == PublishedPayload::Status::Added) || resend) {
+                        server.Publish(payload->connectionId, payload->packetId, payload->topicName, payload->data, { resend, static_cast<bool>(payload->selectedQoS & 0x1), static_cast<bool>(payload->selectedQoS & 0x2), false });
+                        payload->status = PublishedPayload::Status::Sent;
+                        payload->timestamp = now;
+                        if (!payload->selectedQoS) {
                             success = true;
                         }
                     }
@@ -422,97 +351,109 @@ namespace mqtt {
                 } catch (NoPacketException &) {
                     success = true;
                 } catch (...) {
-                    topics.Publish(packet->topicName, packet->data, packet->requestedQoS);
+                    republish(payload->topicName, payload->data, payload->requestedQoS);
 #endif
                     success = true;
                 }
                 if (success) {
-                    handled.push_back({ packet->connectionId, packet->packetId });
-                    packet = packets.erase(packet);
+                    handled.push_back({ payload->connectionId, payload->packetId });
+                    payload = payloads.erase(payload);
                     continue;
                 }
-                packet++;
+                payload++;
             }
             return handled;
         }
     private:
-        std::vector<PublishedPacket> packets;
+        std::vector<PublishedPayload> payloads;
         std::mutex access;
     };
 
-    class QoSRequests {
+    class QoS2Requests {
     public:
-        struct Request {
-            uint64_t connectionId;
-            uint16_t packetId, timeout;
-            uint8_t requestedQoS;
-            enum class Status {
-                Acknowledged,
-                Completed
-            } status;
-            std::chrono::time_point<std::chrono::system_clock> timestamp;
-        };
-        QoSRequests() { }
-        QoSRequests(const QoSRequests &) = delete;
-        QoSRequests(QoSRequests &&) = delete;
-        QoSRequests &operator=(const QoSRequests &) = delete;
-        bool Register(uint64_t connectionId, uint16_t packetId, uint8_t requestedQoS, bool duplicate, uint16_t timeout) {
+        QoS2Requests() { }
+        QoS2Requests(const QoS2Requests &) = delete;
+        QoS2Requests(QoS2Requests &&) = delete;
+        QoS2Requests &operator=(const QoS2Requests &) = delete;
+        void Register(uint64_t connectionId, uint16_t packetId, bool duplicate, uint16_t timeout) {
             std::lock_guard<std::mutex> lock(access);
-            for (auto request = requests.begin(); request != requests.end();) {
-                if (request->connectionId == connectionId) {
-                    if (request->packetId == packetId) {
-                        if (duplicate) {
-                            request->requestedQoS = requestedQoS;
-                            request->status = (requestedQoS < 2) ? Request::Status::Completed : Request::Status::Acknowledged;
-                            return false;
-                        } else if (request->status != Request::Status::Completed) {
-                            throw std::runtime_error("Duplicated packet identifier");
+            for (Connection &connection : connections) {
+                if (connection.connectionId == connectionId) {
+                    for (auto request = connection.requests.begin(); request != connection.requests.end();) {
+                        if (request->packetId == packetId) {
+                            if (!duplicate) {
+                                throw std::runtime_error("Duplicated packet identifier");
+                            }
+                            request = connection.requests.erase(request);
+                            break;
                         }
+                        request++;
                     }
-                    request = requests.erase(request);
-                    break;
+                    if (connection.requests.size() >= SERVICE_RECEIVED_PAYLOADS_LIMIT) {
+                        connection.requests.erase(connection.requests.begin());
+                    }
+                    connection.requests.push_back({ packetId, timeout, std::chrono::system_clock::now() });
+                    return;
                 }
-                request++;
             }
-            requests.push_back({ connectionId, packetId, timeout, requestedQoS, (requestedQoS < 2) ? Request::Status::Completed : Request::Status::Acknowledged, std::chrono::system_clock::now() });
-            return true;
+            connections.push_back({ connectionId, { { packetId, timeout, std::chrono::system_clock::now() } } });
         };
         void Unregister(uint64_t connectionId) {
             std::lock_guard<std::mutex> lock(access);
-            for (auto request = requests.begin(); request != requests.end();) {
-                if (request->connectionId == connectionId) {
-                    request = requests.erase(request);
+            for (auto connection = connections.begin(); connection != connections.end();) {
+                if (connection->connectionId == connectionId) {
+                    connection = connections.erase(connection);
                     return;
                 }
-                request++;
+                connection++;
             }
         };
-        void Complete(uint64_t connectionId, uint16_t packetId, Server &server) {
+        void Unregister(uint64_t connectionId, uint16_t packetId) {
             std::lock_guard<std::mutex> lock(access);
-            for (auto &request : requests) {
-                if ((request.connectionId == connectionId) && (request.packetId == packetId)) {
-                    if ((request.requestedQoS < 2) || (request.status != Request::Status::Acknowledged)) {
-                        throw std::runtime_error("Bad QoS or packet status");
+            for (auto connection = connections.begin(); connection != connections.end();) {
+                if (connection->connectionId == connectionId) {
+                    for (auto request = connection->requests.begin(); request != connection->requests.end();) {
+                        if (request->packetId == packetId) {
+                            request = connection->requests.erase(request);
+                            if (connection->requests.empty()) {
+                                connection = connections.erase(connection);
+                            }
+                            return;
+                        }
+                        request++;
                     }
-                    request.status = Request::Status::Completed;
-                    return;
                 }
+                connection++;
             }
-            throw std::runtime_error("Bad packet identifier");
+            throw std::runtime_error("Incorrect packet identifier");
         };
         void HandleExpired() {
             std::lock_guard<std::mutex> lock(access);
-            for (auto request = requests.begin(); request != requests.end();) {
+            for (auto connection = connections.begin(); connection != connections.end();) {
                 auto now = std::chrono::system_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - request->timestamp).count() > request->timeout) {
-                    request = requests.erase(request);
-                    continue;
+                for (auto request = connection->requests.begin(); request != connection->requests.end();) {
+                    if (std::chrono::duration_cast<std::chrono::seconds>(now - request->timestamp).count() > request->timeout) {
+                        request = connection->requests.erase(request);
+                        if (connection->requests.empty()) {
+                            connection = connections.erase(connection);
+                        }
+                        continue;
+                    }
+                    request++;
                 }
-                request++;
+                connection++;
             }
         };
     private:
-        std::vector<Request> requests;
+        struct Connection {
+            struct Request {
+                uint16_t packetId, timeout;
+                std::chrono::time_point<std::chrono::system_clock> timestamp;
+            };
+            uint64_t connectionId;
+            std::vector<Request> requests;
+        };
+        std::vector<Connection> connections;
         std::mutex access;
     };
 
@@ -528,16 +469,49 @@ namespace mqtt {
         Close();
     }
 
+    void Service::Publish(const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS) {
+        if (payload.size() > SERVICE_PAYLOAD_SIZE_LIMIT) {
+            throw std::runtime_error("Payload size limit violated");
+        }
+        std::lock_guard<std::mutex> lock(access);
+        if (payloads.size() < SERVICE_PAYLOADS_LIMIT) {
+            payloads.push_back({ topicName, payload, requestedQoS });
+        } else {
+            throw std::runtime_error("Payloads limit exceeded");
+        }
+    }
+
     void Service::ServiceThread(Service *instance, const std::string &address, uint16_t port) noexcept {
         Server server;
         Clients clients;
-        PublishedPackets published;
-        QoSRequests requests;
+        PublishedPayloads published;
+        QoS2Requests requests;
         Topics topics;
 
         auto print = [&](const std::string &text) {
             if (instance->printMessage != nullptr) {
                 instance->printMessage(text);
+            }
+        };
+
+        auto removeRecipients = [&](uint64_t connectionId) {
+            std::lock_guard<std::mutex> lock(instance->access);
+            for (Payload &payload : instance->payloads) {
+                if (!payload.assigned || payload.recipients.empty()) {
+                    continue;
+                }
+                for (auto recipient = payload.recipients.begin(); recipient != payload.recipients.end();) {
+                    if (recipient->connectionId == connectionId) {
+                        recipient = payload.recipients.erase(recipient);
+                        continue;
+                    }
+                    recipient++;
+                }
+#ifdef SERVICE_OPERATION_MODE_QUEUE
+                if (payload.recipients.empty()) {
+                    payload.assigned = false;
+                }
+#endif
             }
         };
 
@@ -562,10 +536,15 @@ namespace mqtt {
                 for (std::string &topicName : topics.UnsubscribeAll(connectionId)) {
                     print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] unsubscribed from \"" + topicName + "\"");
                 }
+                removeRecipients(connectionId);
 #ifndef SERVICE_OPERATION_MODE_QUEUE
                 for (uint16_t packetId : published.RemoveAll(connectionId)) {
 #else
-                for (uint16_t packetId : published.RemoveAll(connectionId, topics)) {
+                for (uint16_t packetId : published.RemoveAll(connectionId, [&](const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS) noexcept {
+                    try {
+                        instance->Publish(topicName, payload, requestedQoS);
+                    } catch (...) { }
+                })) {
 #endif
                     clients.RemovePacket(connectionId, packetId);
                 }
@@ -584,7 +563,7 @@ namespace mqtt {
                     topics.Subscribe(connectionId, topicFilter, requestedQoS);
                     print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] subscribed to \"" + topicFilter + "\"");
                 } catch (...) {
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to subscribe to \"" + topicFilter + "\", topic quantity limit exceeded");
+                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to subscribe to \"" + topicFilter + "\", topics limit exceeded");
                     return SubscribeResponse::Failure;
                 }
                 switch (requestedQoS) {
@@ -605,28 +584,20 @@ namespace mqtt {
             });
             server.SetPublishHandler([&](uint64_t connectionId, uint16_t packetId, const std::string &topicName, const std::vector<uint8_t> &payload, PublishFlags &flags) -> PublishResponse {
                 Clients::Client client = clients.Get(connectionId);
-                if (payload.size() > SERVICE_PAYLOAD_SIZE_LIMIT) {
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", payload size limit exceeded");
-                    throw NoPacketException();
-                }
-                bool publish;
                 uint8_t requestedQoS = (static_cast<uint8_t>(flags.qos2) << 1) | static_cast<uint8_t>(flags.qos1);
                 try {
-                    publish = !requestedQoS || requests.Register(connectionId, packetId, requestedQoS, flags.dup, client.keepAlive);
+                    if (requestedQoS > 1) {
+                        requests.Register(connectionId, packetId, flags.dup, client.keepAlive);
+                    }
                 } catch (...) {
                     throw NoPacketException();
                 }
-                if (publish) {
-                    try {
-                        topics.Publish(topicName, payload, requestedQoS);
-                    } catch (...) {
-                        if (requestedQoS) {
-                            requests.Unregister(connectionId);
-                        }
-                        print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", topic limit exceeded");
-                        throw NoPacketException();
-                    }
+                try {
+                    instance->Publish(topicName, payload, requestedQoS);
                     print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] published to \"" + topicName + "\"");
+                } catch (...) {
+                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", payloads limit exceeded");
+                    throw NoPacketException();
                 }
                 switch (requestedQoS) {
                 case 2:
@@ -639,7 +610,7 @@ namespace mqtt {
             });
             server.SetPubackHandler([&](uint64_t connectionId, uint16_t packetId) {
                 try {
-                    published.Remove(connectionId, packetId, 1, PublishedPacket::Status::Sent);
+                    published.Remove(connectionId, packetId, 1, PublishedPayload::Status::Sent);
                     clients.RemovePacket(connectionId, packetId);
                 } catch (...) {
                     throw NoPacketException();
@@ -647,14 +618,14 @@ namespace mqtt {
             });
             server.SetPubrecHandler([&](uint64_t connectionId, uint16_t packetId) {
                 try {
-                    published.UpdateStatus(connectionId, packetId, 2, PublishedPacket::Status::Sent, PublishedPacket::Status::Acknowledged);
+                    published.UpdateStatus(connectionId, packetId, 2, PublishedPayload::Status::Sent, PublishedPayload::Status::Acknowledged);
                 } catch (...) {
                     throw NoPacketException();
                 }
             });
             server.SetPubcompHandler([&](uint64_t connectionId, uint16_t packetId) {
                 try {
-                    published.Remove(connectionId, packetId, 2, PublishedPacket::Status::Acknowledged);
+                    published.Remove(connectionId, packetId, 2, PublishedPayload::Status::Acknowledged);
                     clients.RemovePacket(connectionId, packetId);
                 } catch (...) {
                     throw NoPacketException();
@@ -662,7 +633,7 @@ namespace mqtt {
             });
             server.SetPubrelHandler([&](uint64_t connectionId, uint16_t packetId) {
                 try {
-                    requests.Complete(connectionId, packetId, server);
+                    requests.Unregister(connectionId, packetId);
                 } catch (...) {
                     throw NoPacketException();
                 }
@@ -676,18 +647,86 @@ namespace mqtt {
             }
         });
 
+        auto getPublished = [&]() -> std::vector<PublishedPayload> {
+            std::vector<PublishedPayload> payloads;
+            auto available = clients.GetAvailablePacketsCount();
+            auto subscriptions = topics.GetSubscriptions();
+            auto getSubscribers = [&](const std::string &topicName) -> std::vector<Payload::Recipient> {
+                for (auto &subscription : subscriptions) {
+                    if (subscription.first == topicName) {
+                        return subscription.second;
+                    }
+                }
+                return std::vector<Payload::Recipient>();
+            };
+            std::lock_guard<std::mutex> lock(instance->access);
+            for (auto payload = instance->payloads.begin(); payload != instance->payloads.end();) {
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+                if (!payload->assigned) {
+                    payload->recipients = getSubscribers(payload->topicName);
+#else
+                auto subscriptions = getSubscribers(payload->topicName);
+                if (!payload->assigned && !subscriptions.empty()) {
+                    payload->recipients.push_back(subscriptions[rand() % subscriptions.size()]);
+#endif
+                    payload->assigned = true;
+                }
+                if (!payload->assigned) {
+                    payload++;
+                    continue;
+                }
+                for (auto recipient = payload->recipients.begin(); recipient != payload->recipients.end();) {
+                    auto verify = available.begin();
+                    while (verify != available.end()) {
+                        if (verify->first == recipient->connectionId) {
+                            if (!verify->second) {
+                                recipient++;
+                                break;
+                            }
+                            try {
+                                auto added = clients.AddPacket(recipient->connectionId);
+                                payloads.push_back({ payload->topicName, payload->data, recipient->connectionId, added.first, added.second, payload->requestedQoS, std::min(payload->requestedQoS, recipient->requestedQoS), PublishedPayload::Status::Added });
+                                recipient = payload->recipients.erase(recipient);
+                                verify->second--;
+                            } catch (...) {
+                                recipient++;
+                            }
+                            break;
+                        }
+                        verify++;
+                    }
+                    if (verify == available.end()) {
+                        recipient++;
+                    }
+                }
+                if (payload->recipients.empty()) {
+                    payload = instance->payloads.erase(payload);
+                    continue;
+                }
+                payload++;
+            }
+            return payloads;
+        };
+
         try {
             auto statusTimestamp = std::chrono::system_clock::now();
             unsigned long long publishedCount = 0;
             while (!instance->closed) {
-                bool active = false;
-                auto packets = topics.PublishPackets(clients);
-                publishedCount += packets.size();
-
-                published.Append(packets);
+                bool processing = false;
+                auto payloads = getPublished();
+                publishedCount += payloads.size();
+                published.Append(payloads);
+#ifndef SERVICE_OPERATION_MODE_QUEUE
                 for (auto handled : published.Handle(topics, server)) {
+#else
+                for (auto handled : published.Handle(topics, server, [&](const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS) noexcept {
+                    try {
+                        instance->Publish(topicName, payload, requestedQoS);
+                    } catch (...) { }
+                })) {
+#endif
                     clients.RemovePacket(handled.first, handled.second);
-                    active = true;
+                    processing = true;
                 }
                 auto now = std::chrono::system_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - statusTimestamp).count() >= SERVICE_STATUS_INTERVAL) {
@@ -696,7 +735,7 @@ namespace mqtt {
                     publishedCount = 0;
                 }
                 requests.HandleExpired();
-                if (packets.empty() && !active) {
+                if (payloads.empty() && !processing) {
                     std::this_thread::sleep_for(std::chrono::microseconds(SERVICE_NOP_DELAY));
                 }
             }

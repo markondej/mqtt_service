@@ -4,12 +4,20 @@
 using Console = ConsoleWindow;
 #else
 #include "console.hpp"
+#include <cstring>
 #include <csignal>
 #endif
 
 #define CONSOLE_NOP_DELAY 1000
 
 std::shared_ptr<mqtt::Service> service;
+
+std::vector<uint8_t> GeneratePayload(const std::string &string) {
+    std::vector<uint8_t> payload;
+    payload.resize(string.size());
+    std::memcpy(payload.data(), string.data(), string.size());
+    return payload;
+};
 
 #ifndef _WIN32
 void sigIntHandler(int sigNum)
@@ -62,6 +70,7 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::microseconds(CONSOLE_NOP_DELAY));
         }
 #else
+        service->Publish("test", GeneratePayload("TEST"));
         result = Window::HandleMessages(*service);
 #endif
     } catch (...) {
