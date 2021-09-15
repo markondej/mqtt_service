@@ -4,9 +4,9 @@
 using Console = ConsoleWindow;
 #else
 #include "console.hpp"
-#include <cstring>
 #include <csignal>
 #endif
+#include <cstring>
 
 #define CONSOLE_NOP_DELAY 1000
 
