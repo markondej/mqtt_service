@@ -35,6 +35,9 @@ int main(int argc, char** argv)
 #endif
 {
     std::string address = SERVICE_DEFAULT_ADDRESS;
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+    std::string filename = SERVICE_DEFAULT_TOPICS_FILENAME;
+#endif
     uint16_t port = SERVICE_DEFAULT_PORT;
 
 #ifdef _WIN32
@@ -44,6 +47,9 @@ int main(int argc, char** argv)
 
     if (argc > 1) { address = argv[1]; }
     if (argc > 2) { port = std::stoi(argv[2]); }
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+    if (argc > 3) { filename = argv[3]; }
+#endif
 
 #ifndef _WIN32
     std::signal(SIGINT, sigIntHandler);
@@ -56,7 +62,13 @@ int main(int argc, char** argv)
 
     try {
         Console console;
-        service = std::shared_ptr<mqtt::Service>(new mqtt::Service(address, port, [&](const std::exception &exception) {
+        service = std::shared_ptr<mqtt::Service>(new mqtt::Service(
+            address,
+            port,
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+            filename,
+#endif
+            [&](const std::exception &exception) {
 #ifndef _WIN32
             console.Print(exception.what());
 #else

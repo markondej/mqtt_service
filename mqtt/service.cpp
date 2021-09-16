@@ -1,6 +1,8 @@
 #include "service.hpp"
 #include "protocol.hpp"
 #include <algorithm>
+#include <fstream>
+#include <cstring>
 #include <climits>
 
 #ifndef SERVICE_TOPICS_LIMIT
@@ -22,6 +24,7 @@
 #define SERVICE_DEFAULT_KEEP_ALIVE_TIME 60
 #endif
 
+#define SERVICE_FILE_BUFFER_LENGTH 1024
 #define SERVICE_STATUS_INTERVAL 30
 #define SERVICE_NOP_DELAY 1000
 
@@ -174,13 +177,36 @@ namespace mqtt {
             uint8_t requestedQoS;
         };
 #endif
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+        Topics(const std::string &filename) : filename(filename) {
+            try {
+                LoadRetained();
+            } catch (...) { }
+        }
+        Topics() : filename() { }
+#else
         Topics() { }
+#endif
         Topics(const Topics &) = delete;
         Topics(Topics &&) = delete;
         Topics &operator=(const Topics &) = delete;
 #ifndef SERVICE_OPERATION_MODE_QUEUE
+        virtual ~Topics() {
+            if (!filename.empty()) {
+                try {
+                    SaveRetained();
+                } catch (...) { }
+            }
+        }
         void Retain(const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS) {
             std::lock_guard<std::mutex> lock(access);
+            auto saveRetained = [&]() {
+                if (!filename.empty()) {
+                    try {
+                        SaveRetained();
+                    } catch (...) { }
+                }
+            };
             for (Topic &topic : topics) {
                 if (topic.name == topicName) {
                     if (!payload.empty()) {
@@ -188,6 +214,7 @@ namespace mqtt {
                     } else {
                         topic.retained = { };
                     }
+                    saveRetained();
                     return;
                 }
             }
@@ -196,6 +223,7 @@ namespace mqtt {
             }
             if (!payload.empty()) {
                 topics.push_back({ topicName, { }, { { payload, requestedQoS } } });
+                saveRetained();
             }
         }
         std::vector<Retained> Subscribe(uint64_t connectionId, const std::string &topicName, uint8_t requestedQoS) {
@@ -295,6 +323,97 @@ namespace mqtt {
             std::vector<Retained> retained;
 #endif
         };
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+        void LoadRetained() {
+            enum class DataType {
+                TopicNameSize,
+                PayloadSize,
+                TopicName,
+                Payload,
+                RequestedQoS
+            };
+            std::ifstream file;
+            std::string topicName;
+            std::vector<uint8_t> payload, read;
+            uint32_t topicNameSize, payloadSize;
+            uint8_t requestedQoS;
+            uint8_t buffer[SERVICE_FILE_BUFFER_LENGTH];
+            bool eof = false;
+            DataType current = DataType::TopicNameSize;
+            file.open(filename, std::ifstream::binary);
+            if (!file.is_open()) {
+                throw std::runtime_error("Cannot load retained payloads");
+            }
+            while (!eof) {
+                std::memset(buffer, 0x00, SERVICE_FILE_BUFFER_LENGTH);
+                file.read(reinterpret_cast<char *>(buffer), SERVICE_FILE_BUFFER_LENGTH);
+                eof = file.rdstate() & std::ios::eofbit;
+                for (unsigned i = 0; i < file.gcount(); i++) {
+                    read.push_back(static_cast<uint8_t>(buffer[i]));
+                    switch (current) {
+                    case DataType::RequestedQoS:
+                        current = DataType::TopicNameSize;
+                        requestedQoS = read[0];
+                        Retain(topicName, payload, requestedQoS);
+                        read.clear();
+                        break;
+                    case DataType::Payload:
+                        if (read.size() >= payloadSize) {
+                            current = DataType::RequestedQoS;
+                            payload = read;
+                            read.clear();
+                        }
+                        break;
+                    case DataType::PayloadSize:
+                        if (read.size() >= sizeof(uint32_t)) {
+                            current = DataType::Payload;
+                            payloadSize = *reinterpret_cast<uint32_t *>(read.data());
+                            read.clear();
+                        }
+                        break;
+                    case DataType::TopicName:
+                        if (read.size() >= topicNameSize) {
+                            current = DataType::PayloadSize;
+                            topicName.clear();
+                            for (unsigned long long j = 0; j < read.size(); j++) {
+                                topicName += read[j];
+                            }
+                            read.clear();
+                        }
+                        break;
+                    case DataType::TopicNameSize:
+                        if (read.size() >= sizeof(uint32_t)) {
+                            current = DataType::TopicName;
+                            topicNameSize = *reinterpret_cast<uint32_t *>(read.data());
+                            read.clear();
+                        }
+                        break;
+                    }
+                }
+            }
+            file.close();
+        }
+        void SaveRetained() {
+            std::ofstream file;
+            file.open(filename);
+            if (!file.is_open()) {
+                throw std::runtime_error("Cannot save retained payloads");
+            }
+            for (Topic &topic : topics) {
+                for (Retained &retained : topic.retained) {
+                    uint32_t size = static_cast<uint32_t>(topic.name.size());
+                    file.write(reinterpret_cast<char *>(&size), sizeof(uint32_t));
+                    file.write(topic.name.data(), topic.name.size());
+                    size = static_cast<uint32_t>(retained.payload.size());
+                    file.write(reinterpret_cast<char *>(&size), sizeof(uint32_t));
+                    file.write(reinterpret_cast<char *>(retained.payload.data()), retained.payload.size());
+                    file.write(reinterpret_cast<char *>(&retained.requestedQoS), 1);
+                }
+            }
+            file.close();
+        }
+        std::string filename;
+#endif
         std::vector<Topic> topics;
         std::mutex access;
     };
@@ -390,7 +509,7 @@ namespace mqtt {
                     }
                     if ((payload->status == PublishedPayload::Status::Added) || resend) {
                         server.Publish(payload->connectionId, payload->packetId, payload->topicName, payload->data, {
-                            resend, 
+                            resend,
                             static_cast<bool>(payload->selectedQoS & 0x1), static_cast<bool>(payload->selectedQoS & 0x2),
 #ifndef SERVICE_OPERATION_MODE_QUEUE
                             payload->retain
@@ -517,11 +636,33 @@ namespace mqtt {
         std::mutex access;
     };
 
-    Service::Service(const std::string &address, uint16_t port, const ExceptionHandler &exceptionHandler, const MessageHandler &messageHandler)
-        : topics(reinterpret_cast<void *>(new Topics())), clients(reinterpret_cast<void *>(new Clients()))
+    Service::Service(
+        const std::string &address,
+        uint16_t port,
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+        const std::string &filename,
+#endif
+        const ExceptionHandler &exceptionHandler,
+        const MessageHandler &messageHandler
+    )
+        : clients(reinterpret_cast<void *>(new Clients()))
     {
         printMessage = messageHandler;
         handleException = exceptionHandler;
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+        if (!filename.empty()) {
+            try {
+                printMessage("Loading saved topics from " + filename);
+                topics = reinterpret_cast<void *>(new Topics(filename));
+            } catch (...) {
+                printMessage("Failed to load topics");
+            }
+        } else {
+            topics = reinterpret_cast<void *>(new Topics());
+        }
+#else
+        topics = reinterpret_cast<void *>(new Topics());
+#endif
         thread = std::thread(ServiceThread, this, address, port);
     }
 
@@ -540,27 +681,28 @@ namespace mqtt {
         if (payload.size() > SERVICE_PAYLOAD_SIZE_LIMIT) {
             throw std::runtime_error("Payload size limit violated");
         }
-        std::lock_guard<std::mutex> lock(access);
-        if (payloads.size() < SERVICE_RECEIVED_PAYLOADS_LIMIT) {
-            payloads.push_back({
-                topicName,
-                payload,
+        {
+            std::lock_guard<std::mutex> lock(access);
+            if (payloads.size() < SERVICE_RECEIVED_PAYLOADS_LIMIT) {
+                payloads.push_back({
+                    topicName,
+                    payload,
 #ifndef SERVICE_OPERATION_MODE_QUEUE
-                requestedQoS,
-                retain
+                    requestedQoS,
+                    retain
 #else
-                requestedQoS
+                    requestedQoS
 #endif
-            });
-        } else {
-            throw std::runtime_error("Payloads limit exceeded");
+                });
+            } else {
+                throw std::runtime_error("Payloads limit exceeded");
+            }
         }
 #ifndef SERVICE_OPERATION_MODE_QUEUE
         if (retain) {
             try {
                 reinterpret_cast<Topics *>(topics)->Retain(topicName, payload, requestedQoS);
-            }
-            catch (...) {}
+            } catch (...) { }
         }
 #endif
     }
@@ -715,13 +857,6 @@ namespace mqtt {
                     print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", payloads limit exceeded");
                     throw NoPacketException();
                 }
-#ifndef SERVICE_OPERATION_MODE_QUEUE
-                if (flags.retain) {
-                    try {
-                        topics->Retain(topicName, payload, requestedQoS);
-                    } catch (...) { }
-                }
-#endif
                 switch (requestedQoS) {
                 case 2:
                     return PublishResponse::QoS2;

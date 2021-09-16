@@ -540,13 +540,11 @@ namespace mqtt {
                 Event event = { instance->connectionId, address, Event::Type::Connected };
                 InputStream input = { new uint8_t[TCPSERVER_RECV_BUFFER_LENGTH], 0 };
                 OutputStream output; output.data = nullptr; output.disconnect = false;
-                bool disconnected = false;
                 while ((event.type == Event::Type::Connected) || instance->enabled) {
                     if (output.data != nullptr) {
                         int bytes = send(sock, reinterpret_cast<char *>(output.data), output.length, 0);
                         delete[] output.data; output.data = nullptr; output.length = 0;
                         if (bytes == TCPSERVER_SOCKET_ERROR) {
-                            disconnected = true;
                             instance->enabled = false;
                             break;
                         }
@@ -563,7 +561,6 @@ namespace mqtt {
 #else
                     if ((bytes == 0) || ((bytes == TCPSERVER_SOCKET_ERROR) && ((errno != EWOULDBLOCK) && (errno != EAGAIN)))) {
 #endif
-                        disconnected = true;
                         instance->enabled = false;
                         if (event.type != Event::Type::Connected) {
                             break;

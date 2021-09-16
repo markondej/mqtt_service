@@ -18,7 +18,7 @@ install: $(EXECUTABLE)
 	ln -s /lib/systemd/system/mqtt_service.service /etc/systemd/system/mqtt_service.service
 
 mqtt_service.o: mqtt_service.cpp
-	g++ $(FLAGS) -DPRODUCT_NAME="\"$(PRODUCT_NAME)\"" -DPRODUCT_VERSION="\"$(PRODUCT_VERSION)\"" -c mqtt_service.cpp
+	g++ $(FLAGS) -DPRODUCT_NAME="\"$(PRODUCT_NAME)\"" -DPRODUCT_VERSION="\"$(PRODUCT_VERSION)\"" $(SERVICE_DEFINES) -c mqtt_service.cpp
 
 service.o: mqtt/service.cpp
 	g++ $(FLAGS) $(SERVICE_DEFINES) -c mqtt/service.cpp
