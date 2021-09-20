@@ -46,9 +46,9 @@
 		</Linker>
 		<Unit filename="about_window.cpp" />
 		<Unit filename="about_window.hpp" />
+		<Unit filename="console.hpp" />
 		<Unit filename="console_window.cpp" />
 		<Unit filename="console_window.hpp" />
-		<Unit filename="console.hpp" />
 		<Unit filename="mqtt/protocol.cpp" />
 		<Unit filename="mqtt/protocol.hpp" />
 		<Unit filename="mqtt/service.cpp" />

@@ -647,15 +647,17 @@ namespace mqtt {
     )
         : clients(reinterpret_cast<void *>(new Clients()))
     {
-        printMessage = messageHandler;
-        handleException = exceptionHandler;
 #ifndef SERVICE_OPERATION_MODE_QUEUE
         if (!filename.empty()) {
             try {
-                printMessage("Loading saved topics from " + filename);
+                if (messageHandler != nullptr) {
+                    messageHandler("Loading saved topics from " + filename);
+                }
                 topics = reinterpret_cast<void *>(new Topics(filename));
             } catch (...) {
-                printMessage("Failed to load topics");
+                if (messageHandler != nullptr) {
+                    messageHandler("Failed to load topics");
+                }
             }
         } else {
             topics = reinterpret_cast<void *>(new Topics());
@@ -663,7 +665,7 @@ namespace mqtt {
 #else
         topics = reinterpret_cast<void *>(new Topics());
 #endif
-        thread = std::thread(ServiceThread, this, address, port);
+        thread = std::thread(ServiceThread, this, address, port, exceptionHandler, messageHandler);
     }
 
     Service::~Service()
@@ -707,7 +709,13 @@ namespace mqtt {
 #endif
     }
 
-    void Service::ServiceThread(Service *instance, const std::string &address, uint16_t port) noexcept {
+    void Service::ServiceThread(
+        Service *instance,
+        const std::string &address,
+        uint16_t port,
+        const ExceptionHandler &exceptionHandler,
+        const MessageHandler &messageHandler
+    ) noexcept {
         PublishedPayloads published;
         Packets receivedQoS2;
         Server server;
@@ -715,9 +723,14 @@ namespace mqtt {
         Topics *topics = reinterpret_cast<Topics *>(instance->topics);
         Clients *clients = reinterpret_cast<Clients *>(instance->clients);
 
-        auto print = [&](const std::string &message) {
-            if (instance->printMessage != nullptr) {
-                instance->printMessage(message);
+        auto handleException = [&](const std::exception &exception) {
+            if (exceptionHandler != nullptr) {
+                exceptionHandler(exception);
+            }
+        };
+        auto printMessage = [&](const std::string &message) {
+            if (messageHandler != nullptr) {
+                messageHandler(message);
             }
         };
 #ifndef SERVICE_OPERATION_MODE_QUEUE
@@ -761,25 +774,25 @@ namespace mqtt {
         };
 
         std::thread serverThread([&]() {
-            print("Starting service at " + address + ":" + std::to_string(port));
+            printMessage("Starting service at: " + address + ":" + std::to_string(port));
 
             server.SetConnectHandler([&](uint64_t connectionId, const ConnectFlags &flags, const ConnectParams &params, bool &sessionPresent) -> ConnectResponse {
                 if (flags.userName || flags.password) {
-                    print("Connection refused [\"" + params.clientId + "\":" + std::to_string(connectionId) + "], authorization not supported");
+                    printMessage("Connection refused [\"" + params.clientId + "\":" + std::to_string(connectionId) + "], authorization not supported");
                     return ConnectResponse::RefusedBadCredentials;
                 }
                 if (flags.willFlag) {
-                    print("Connection refused [\"" + params.clientId + "\":" + std::to_string(connectionId) + "], Will not supported");
+                    printMessage("Connection refused [\"" + params.clientId + "\":" + std::to_string(connectionId) + "], Will not supported");
                     return ConnectResponse::RefusedUnavailable;
                 }
                 Clients::Client client = clients->Add(connectionId, params.clientId, params.keepAlive);
-                print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] connected");
+                printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] connected");
                 return ConnectResponse::Accepted;
             });
             server.SetDisconnectHandler([&](uint64_t connectionId, bool graceful) {
                 Clients::Client client = clients->Get(connectionId);
                 for (std::string &topicName : topics->UnsubscribeAll(connectionId)) {
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] unsubscribed from \"" + topicName + "\"");
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] unsubscribed from \"" + topicName + "\"");
                 }
                 removeRecipients(connectionId);
 #ifndef SERVICE_OPERATION_MODE_QUEUE
@@ -795,13 +808,13 @@ namespace mqtt {
                 }
                 receivedQoS2.Unregister(connectionId);
                 clients->Delete(connectionId);
-                print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] disconnected");
+                printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] disconnected");
             });
             server.SetSubscribeHandler([&](uint64_t connectionId, const std::string &topicFilter, uint8_t requestedQoS) -> SubscribeResponse {
                 Clients::Client client = clients->Get(connectionId);
                 std::size_t found = topicFilter.find("*");
                 if (found != std::string::npos) {
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to subscribe to \"" + topicFilter + "\", wildcards not supported");
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to subscribe to \"" + topicFilter + "\", wildcards not supported");
                     return SubscribeResponse::Failure;
                 }
 #ifndef SERVICE_OPERATION_MODE_QUEUE
@@ -812,9 +825,9 @@ namespace mqtt {
                 try {
                     topics->Subscribe(connectionId, topicFilter, requestedQoS);
 #endif
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] subscribed to \"" + topicFilter + "\"");
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] subscribed to \"" + topicFilter + "\"");
                 } catch (...) {
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to subscribe to \"" + topicFilter + "\", topics limit exceeded");
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to subscribe to \"" + topicFilter + "\", topics limit exceeded");
                     return SubscribeResponse::Failure;
                 }
 #ifndef SERVICE_OPERATION_MODE_QUEUE
@@ -833,7 +846,7 @@ namespace mqtt {
                 Clients::Client client = clients->Get(connectionId);
                 try {
                     topics->Unsubscribe(connectionId, topicFilter);
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] unsubscribed from \"" + topicFilter + "\"");
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] unsubscribed from \"" + topicFilter + "\"");
                 } catch (...) { }
             });
             server.SetPublishHandler([&](uint64_t connectionId, uint16_t packetId, const std::string &topicName, const std::vector<uint8_t> &payload, PublishFlags &flags) -> PublishResponse {
@@ -852,9 +865,9 @@ namespace mqtt {
 #else
                     instance->Publish(topicName, payload, requestedQoS);
 #endif
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] published to \"" + topicName + "\"");
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] published to \"" + topicName + "\"");
                 } catch (...) {
-                    print("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", payloads limit exceeded");
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", payloads limit exceeded");
                     throw NoPacketException();
                 }
                 switch (requestedQoS) {
@@ -898,10 +911,10 @@ namespace mqtt {
             });
 
             try {
-                server.Enable(address, port, SERVICE_DEFAULT_MAX_CONNECTIONS);
+                server.Enable(address, port);
             } catch (std::exception &exception) {
-                instance->handleException(exception);
-                instance->closed = true;;
+                handleException(exception);
+                instance->closed = true;
             }
         });
 
@@ -1000,7 +1013,7 @@ namespace mqtt {
                 }
                 auto now = std::chrono::system_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - statusTimestamp).count() >= SERVICE_STATUS_INTERVAL) {
-                    print("Status: [topics:" + std::to_string(topics->Count()) + ", clients:" + std::to_string(clients->Count()) + ", processed:" + std::to_string(publishedCount) + "]");
+                    printMessage("Status: [topics:" + std::to_string(topics->Count()) + ", clients:" + std::to_string(clients->Count()) + ", processed:" + std::to_string(publishedCount) + "]");
                     statusTimestamp = now;
                     publishedCount = 0;
                 }
@@ -1010,8 +1023,8 @@ namespace mqtt {
                 }
             }
         } catch (std::exception &exception) {
-            instance->handleException(exception);
-            instance->closed = true;;
+            handleException(exception);
+            instance->closed = true;
         }
         server.Disable();
         serverThread.join();

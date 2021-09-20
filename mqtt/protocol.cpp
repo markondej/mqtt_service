@@ -3,6 +3,7 @@
 #include <atomic>
 #include <thread>
 #include <regex>
+#include <cassert>
 #ifdef _WIN32
 #define _WIN32_WINNT 0x0601
 #include <ws2tcpip.h>
@@ -18,6 +19,10 @@
 
 #ifndef TCPSERVER_RECV_BUFFER_LENGTH
 #define TCPSERVER_RECV_BUFFER_LENGTH 1024
+#endif
+
+#ifndef TCPSERVER_CONNECTIONS_LIMIT
+#define TCPSERVER_CONNECTIONS_LIMIT 1024
 #endif
 
 #define TCPSERVER_SERVER_NOP_DELAY 1000
@@ -376,12 +381,13 @@ namespace mqtt {
         TCPServer(const TCPServer &) = delete;
         TCPServer(TCPServer &&) = delete;
         TCPServer &operator=(const TCPServer &) = delete;
-        void SetHandler(const EventHandler &handler) {
+        void SetEventHandler(const EventHandler &handler) {
             std::lock_guard<std::mutex> lock(access);
-            this->handler = handler;
+            handleEvent = handler;
         }
-        void Enable(const std::string address, uint16_t port, uint32_t maxConn = 64) {
+        void Enable(const std::string address, uint16_t port, uint32_t connections = TCPSERVER_CONNECTIONS_LIMIT) {
             std::lock_guard<std::mutex> lock(access);
+            assert(handleEvent != nullptr);
 #ifdef _WIN32
             WinSock::Initialize();
 #endif
@@ -425,7 +431,7 @@ namespace mqtt {
                 throw std::runtime_error("Cannot enable service (bind error)");
             }
 
-            if (listen(sock, maxConn) == TCPSERVER_SOCKET_ERROR) {
+            if (listen(sock, connections) == TCPSERVER_SOCKET_ERROR) {
                 TCPSERVER_CLOSESOCKET(sock);
                 throw std::runtime_error("Cannot enable service (listen error)");
             }
@@ -456,7 +462,7 @@ namespace mqtt {
 #else
                 socklen_t length = client.GetSockAddrLength();
 #endif
-                if ((UpdateClients() >= maxConn) ||
+                if ((UpdateClients() >= connections) ||
 #ifdef _WIN32
                     ((conn = accept(sock, client.GetSockAddr(), &length)) == INVALID_SOCKET)
 #else
@@ -466,12 +472,12 @@ namespace mqtt {
                     std::this_thread::sleep_for(std::chrono::microseconds(TCPSERVER_SERVER_NOP_DELAY));
                     continue;
                 }
-                if (!setNonBlock(conn) || (handler == nullptr)) {
+                if (!setNonBlock(conn)) {
                     TCPSERVER_CLOSESOCKET(conn);
                     continue;
                 }
                 try {
-                    clients.push_back(new Client(conn, client, getNextId(), handler));
+                    clients.push_back(new Client(conn, client, getNextId(), handleEvent));
                 } catch (...) {
 #ifdef _WIN32
                     shutdown(conn, SD_BOTH);
@@ -514,7 +520,7 @@ namespace mqtt {
         };
         class Client {
         public:
-            Client(TCPSERVER_SOCKET sock, const AddressIP &address, uint64_t connectionId, EventHandler &handler) : enabled(true), connectionId(connectionId) {
+            Client(TCPSERVER_SOCKET sock, const AddressIP &address, uint64_t connectionId, const EventHandler &handler) : enabled(true), connectionId(connectionId) {
                 thread = std::thread(ClientThread, this, sock, address, handler);
             }
             Client(const Client &) = delete;
@@ -536,7 +542,7 @@ namespace mqtt {
                 return connectionId;
             }
         private:
-            static void ClientThread(Client *instance, TCPSERVER_SOCKET sock, const AddressIP &address, EventHandler handler) noexcept {
+            static void ClientThread(Client *instance, TCPSERVER_SOCKET sock, const AddressIP &address, EventHandler handleEvent) noexcept {
                 Event event = { instance->connectionId, address, Event::Type::Connected };
                 InputStream input = { new uint8_t[TCPSERVER_RECV_BUFFER_LENGTH], 0 };
                 OutputStream output; output.data = nullptr; output.disconnect = false;
@@ -569,7 +575,7 @@ namespace mqtt {
                     input.length = (bytes != TCPSERVER_SOCKET_ERROR) ? bytes : 0;
                     try {
                         output.disconnect = false;
-                        handler(event, input, output);
+                        handleEvent(event, input, output);
                         input.length = 0;
                     } catch (...) {
                         instance->enabled = false;
@@ -590,7 +596,7 @@ namespace mqtt {
                 }
                 try {
                     output.disconnect = true;
-                    handler(event, input, output);
+                    handleEvent(event, input, output);
                     if (output.data != nullptr) {
                         delete[] output.data;
                     }
@@ -601,7 +607,7 @@ namespace mqtt {
             std::atomic_bool enabled;
             std::atomic_uint64_t connectionId;
         };
-        EventHandler handler;
+        EventHandler handleEvent;
         std::vector<Client *> clients;
         std::atomic_bool enabled;
         std::mutex access;
@@ -870,9 +876,9 @@ namespace mqtt {
     }
 
     Server::Server()
-        : server(reinterpret_cast<void *>(new TCPServer())), connections(reinterpret_cast<void *>(new Connections()))
+        : tcp(reinterpret_cast<void *>(new TCPServer())), connections(reinterpret_cast<void *>(new Connections()))
     {
-        reinterpret_cast<TCPServer *>(server)->SetHandler([&](const TCPServer::Event &event, const TCPServer::InputStream &input, TCPServer::OutputStream &output) {
+        reinterpret_cast<TCPServer *>(tcp)->SetEventHandler([&](const TCPServer::Event &event, const TCPServer::InputStream &input, TCPServer::OutputStream &output) {
             Connections *connections = reinterpret_cast<Connections *>(this->connections);
             bool connected = false, handled = false;
             auto connection = (event.type == TCPServer::Event::Type::Connected) ? connections->Add(event.connectionId, event.address, connected) : connections->ClearBuffers(event.connectionId);
@@ -931,24 +937,24 @@ namespace mqtt {
 
     Server::~Server()
     {
-        delete reinterpret_cast<TCPServer *>(server);
+        delete reinterpret_cast<TCPServer *>(tcp);
         delete reinterpret_cast<Connections *>(connections);
     }
 
-    void Server::Enable(const std::string &address, uint16_t port, uint32_t maxConn)
+    void Server::Enable(const std::string &address, uint16_t port, uint32_t connections)
     {
         std::lock_guard<std::mutex> lock(access);
-        reinterpret_cast<TCPServer *>(server)->Enable(address, port, maxConn);
+        reinterpret_cast<TCPServer *>(tcp)->Enable(address, port, connections);
     }
 
     void Server::Disable() noexcept
     {
-        reinterpret_cast<TCPServer *>(server)->Disable();
+        reinterpret_cast<TCPServer *>(tcp)->Disable();
     }
 
     bool Server::IsEnabled() const
     {
-        return reinterpret_cast<TCPServer *>(server)->IsEnabled();
+        return reinterpret_cast<TCPServer *>(tcp)->IsEnabled();
     }
 
     void Server::SetConnectHandler(const ConnectHandler &handler)

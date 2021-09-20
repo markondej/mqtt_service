@@ -5,6 +5,10 @@
 #include <vector>
 #include <mutex>
 
+#ifndef MQTT_SERVER_CONNECTIONS_LIMIT
+#define MQTT_SERVER_CONNECTIONS_LIMIT USHRT_MAX
+#endif
+
 namespace mqtt {
     class Packet;
 
@@ -71,7 +75,7 @@ namespace mqtt {
         Server(Server &&) = delete;
         virtual ~Server();
         Server &operator=(const Server &) = delete;
-        void Enable(const std::string &address, uint16_t port, uint32_t maxConn = 64);
+        void Enable(const std::string &address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT);
         void Disable() noexcept;
         bool IsEnabled() const;
         void SetConnectHandler(const ConnectHandler &handler);
@@ -88,7 +92,7 @@ namespace mqtt {
     private:
         Packet HandlePacket(const Packet &packet, uint64_t connectionId, bool &connected, uint16_t &keepAlive);
 
-        void *server, *connections;
+        void *tcp, *connections;
         std::mutex access;
         PublishHandler publish;
         ConnectHandler connect;
