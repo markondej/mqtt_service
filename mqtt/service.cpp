@@ -570,7 +570,7 @@ namespace mqtt {
             static void ClientThread(Client *instance, MQTT_SERVER_SOCKET sock, const AddressIP &address, EventHandler handleEvent) noexcept {
                 Event event = { instance->connectionId, address, Event::Type::Connected };
                 InputStream input = { new uint8_t[MQTT_SERVER_RECV_BUFFER_LENGTH], 0 };
-                OutputStream output; output.data = nullptr; output.disconnect = false;
+                OutputStream output; output.data = nullptr; output.disconnect = false; bool delay = false;
                 while ((event.type == Event::Type::Connected) || instance->enabled) {
                     if (output.data != nullptr) {
                         int bytes = send(sock, reinterpret_cast<char *>(output.data), output.length, 0);
@@ -579,7 +579,7 @@ namespace mqtt {
                             instance->enabled = false;
                             break;
                         }
-                    } else if (!input.length && (event.type != Event::Type::Connected) && !output.disconnect) {
+                    } else if (delay && !output.disconnect) {
                         std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_CLIENT_NOP_DELAY));
                     }
                     if (output.disconnect) {
@@ -598,6 +598,7 @@ namespace mqtt {
                         }
                     }
                     input.length = (bytes != MQTT_SERVER_SOCKET_ERROR) ? bytes : 0;
+                    delay = !input.length;
                     try {
                         output.disconnect = false;
                         handleEvent(event, input, output);
