@@ -1862,9 +1862,12 @@ namespace mqtt {
                 try {
                     bool resend = false;
                     if ((payload->status != PublishedPayload::Status::Added) && (std::chrono::duration_cast<std::chrono::seconds>(now - payload->timestamp).count() > payload->timeout)) {
+                        if (payload->status != PublishedPayload::Status::Sent) {
+                            throw NoPacketException();
+                        }
 #ifndef SERVICE_OPERATION_MODE_QUEUE
                         if (!topics.IsSubscribed(payload->connectionId, payload->topicName)) {
-                            throw NoPacketException();
+                            throw std::runtime_error("Unsubscribed");
                         }
                         resend = true;
 #else
