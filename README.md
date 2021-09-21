@@ -1,6 +1,6 @@
 # Light MQTT Service
 
-Light MQTT is light cross-platform MQTT broker, written in C++, designed for non-specialized use. It is compatible with MQTT 3.1.1 clients.
+Light MQTT is light cross-platform MQTT broker, written in C++, designed for specialized use. It is compatible with MQTT 3.1.1 clients.
 
 It may be easily embedded into custom applications, eg:
 ```
@@ -8,7 +8,7 @@ It may be easily embedded into custom applications, eg:
 
 int main(int argc, char** argv)
 {
-    // Run service at port 1883
+    // Run service on port 1883
     mqtt::Service service("127.0.0.1", 1883);
     // Check if service is enabled
     while (service.IsEnabled()) {
