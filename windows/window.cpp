@@ -126,7 +126,7 @@ Window::~Window()
     }
 }
 
-WPARAM Window::HandleMessages(Thread &thread)
+WPARAM Window::HandleMessages(mqtt::Service &service)
 {
     MSG msg;
     while (true) {
@@ -138,7 +138,7 @@ WPARAM Window::HandleMessages(Thread &thread)
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
             }
-        } else if (thread.IsClosed()) {
+        } else if (!service.IsEnabled()) {
             for (auto &instance : WindowInstances::GetAll()) {
                 instance.window->Close(TRUE);
             }
@@ -146,7 +146,7 @@ WPARAM Window::HandleMessages(Thread &thread)
             std::this_thread::sleep_for(std::chrono::microseconds(WINDOW_NOP_INTERVAL));
         }
     }
-    thread.Close();
+    service.Disable();
     return msg.wParam;
 }
 

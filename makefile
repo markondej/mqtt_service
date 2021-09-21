@@ -7,8 +7,8 @@ ifeq ($(QUEUE), 1)
 	SERVICE_DEFINES += -DSERVICE_OPERATION_MODE_QUEUE
 endif
 
-all: mqtt_service.o service.o protocol.o thread.o
-	g++ -lpthread -o $(EXECUTABLE) mqtt_service.o service.o protocol.o thread.o
+all: mqtt_service.o service.o
+	g++ -lpthread -o $(EXECUTABLE) mqtt_service.o service.o
 
 install: $(EXECUTABLE)
 	install $(EXECUTABLE) /usr/sbin
@@ -22,12 +22,6 @@ mqtt_service.o: mqtt_service.cpp
 
 service.o: mqtt/service.cpp
 	g++ $(FLAGS) $(SERVICE_DEFINES) -c mqtt/service.cpp
-
-protocol.o: mqtt/protocol.cpp
-	g++ $(FLAGS) -c mqtt/protocol.cpp
-
-thread.o: thread/thread.cpp
-	g++ $(FLAGS) -c thread/thread.cpp
 
 clean:
 	rm *.o

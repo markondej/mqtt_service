@@ -1,8 +1,7 @@
 #pragma once
 
-#include "../thread/thread.hpp"
+#include "../mqtt/service.hpp"
 #include <windows.h>
-#include <atomic>
 
 class Window
 {
@@ -13,7 +12,7 @@ public:
     Window(Window&&) = delete;
     Window& operator=(const Window&) = delete;
     virtual ~Window();
-    static WPARAM HandleMessages(Thread &thread);
+    static WPARAM HandleMessages(mqtt::Service &service);
 protected:
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept;
     virtual LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexcept;

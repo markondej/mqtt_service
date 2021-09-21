@@ -1,8 +1,9 @@
 #pragma once
 
-#include "../thread/thread.hpp"
 #include <functional>
 #include <vector>
+#include <thread>
+#include <atomic>
 #include <mutex>
 
 #define SERVICE_DEFAULT_ADDRESS "0.0.0.0"
@@ -15,7 +16,7 @@
 namespace mqtt {
     struct Payload;
 
-    class Service : public Thread {
+    class Service {
     public:
         using MessageHandler = std::function<void(const std::string &message) noexcept>;
         using ExceptionHandler = std::function<void(const std::exception &exception) noexcept>;
@@ -28,12 +29,22 @@ namespace mqtt {
             const ExceptionHandler &exceptionHandler = nullptr,
             const MessageHandler &messageHandler = nullptr
         );
-#ifndef SERVICE_OPERATION_MODE_QUEUE
-        void Publish(const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS = 0, bool retain = false);
-#else
-        void Publish(const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS = 0);
-#endif
+        Service(const Service &) = delete;
+        Service(Service &&) = delete;
+        Service &operator=(const Service &) = delete;
         virtual ~Service();
+        void Publish(
+            const std::string &topicName,
+            const std::vector<uint8_t> &payload,
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+            uint8_t requestedQoS = 0,
+            bool retain = false
+#else
+            uint8_t requestedQoS = 0
+#endif
+        );
+        bool IsEnabled() const;
+        void Disable() noexcept;
     private:
         static void ServiceThread(
             Service *instance,
@@ -42,8 +53,10 @@ namespace mqtt {
             const ExceptionHandler &exceptionHandler,
             const MessageHandler &messageHandler
         ) noexcept;
+        std::atomic_bool enabled;
         std::vector<Payload> payloads;
-        void *topics, *clients;
+        std::thread thread;
         std::mutex access;
+        void *topics;
     };
 }

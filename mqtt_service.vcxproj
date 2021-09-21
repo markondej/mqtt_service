@@ -182,10 +182,8 @@
     <ClInclude Include="about_window.hpp" />
     <ClInclude Include="console_window.hpp" />
     <ClInclude Include="console.hpp" />
-    <ClInclude Include="mqtt\protocol.hpp" />
     <ClInclude Include="mqtt\service.hpp" />
     <ClInclude Include="resources\resource.h" />
-    <ClInclude Include="thread\thread.hpp" />
     <ClInclude Include="windows\product_info.hpp" />
     <ClInclude Include="windows\window.hpp" />
   </ItemGroup>
@@ -193,9 +191,7 @@
     <ClCompile Include="about_window.cpp" />
     <ClCompile Include="console_window.cpp" />
     <ClCompile Include="mqtt_service.cpp" />
-    <ClCompile Include="mqtt\protocol.cpp" />
     <ClCompile Include="mqtt\service.cpp" />
-    <ClCompile Include="thread\thread.cpp" />
     <ClCompile Include="windows\product_info.cpp" />
     <ClCompile Include="windows\window.cpp" />
   </ItemGroup>

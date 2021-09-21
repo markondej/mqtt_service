@@ -49,8 +49,6 @@
 		<Unit filename="console.hpp" />
 		<Unit filename="console_window.cpp" />
 		<Unit filename="console_window.hpp" />
-		<Unit filename="mqtt/protocol.cpp" />
-		<Unit filename="mqtt/protocol.hpp" />
 		<Unit filename="mqtt/service.cpp" />
 		<Unit filename="mqtt/service.hpp" />
 		<Unit filename="mqtt_service.cpp" />
@@ -59,8 +57,6 @@
 		<Unit filename="resources/resource.rc">
 			<Option compilerVar="WINDRES" />
 		</Unit>
-		<Unit filename="thread/thread.cpp" />
-		<Unit filename="thread/thread.hpp" />
 		<Unit filename="windows/product_info.cpp" />
 		<Unit filename="windows/product_info.hpp" />
 		<Unit filename="windows/window.cpp" />

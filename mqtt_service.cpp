@@ -22,8 +22,8 @@ std::vector<uint8_t> GeneratePayload(const std::string &string) {
 #ifndef _WIN32
 void sigIntHandler(int sigNum)
 {
-    if (service && !service->IsClosed()) {
-        service->Close();
+    if (service && service->IsEnabled()) {
+        service->Disable();
     }
 }
 #endif
@@ -78,7 +78,7 @@ int main(int argc, char** argv)
             console.Print(message);
         }));
 #ifndef _WIN32
-        while (!service->IsClosed()) {
+        while (service->IsEnabled()) {
             std::this_thread::sleep_for(std::chrono::microseconds(CONSOLE_NOP_DELAY));
         }
 #else
