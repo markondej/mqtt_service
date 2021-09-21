@@ -1,6 +1,6 @@
 EXECUTABLE = mqtt_service
 PRODUCT_NAME = Light MQTT Service
-PRODUCT_VERSION = 0.9.1.0
+PRODUCT_VERSION = 0.9.2.0
 FLAGS = -Wall -O3 -std=c++11
 
 ifeq ($(QUEUE), 1)
