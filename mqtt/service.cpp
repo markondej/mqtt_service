@@ -2155,7 +2155,7 @@ namespace mqtt {
         };
 
         std::thread serverThread([&]() {
-            printMessage("Starting service at: " + address + ":" + std::to_string(port));
+            printMessage("Starting service on: " + address + ":" + std::to_string(port));
 
             server.SetConnectHandler([&](uint64_t connectionId, const Server::ConnectFlags &flags, const Server::ConnectParams &params, bool &sessionPresent) -> Server::ConnectResponse {
                 if (flags.userName || flags.password) {
