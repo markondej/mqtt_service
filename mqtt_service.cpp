@@ -68,6 +68,7 @@ int main(int argc, char** argv)
 #ifndef SERVICE_OPERATION_MODE_QUEUE
             filename,
 #endif
+            nullptr,
             [&](const std::exception &exception) {
 #ifndef _WIN32
             console.Print(exception.what());

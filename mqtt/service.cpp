@@ -2048,10 +2048,11 @@ namespace mqtt {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
         const std::string &filename,
 #endif
+        const PublishHandler &publishHandler,
         const ExceptionHandler &exceptionHandler,
         const MessageHandler &messageHandler
     )
-        : enabled(true)
+        : publishHandler(publishHandler), enabled(true), topics(nullptr)
     {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
         if (!filename.empty()) {
@@ -2065,12 +2066,13 @@ namespace mqtt {
                     messageHandler("Failed to load topics");
                 }
             }
-        } else {
+        }
+        if (topics == nullptr) {
+#else
+        {
+#endif
             topics = reinterpret_cast<void *>(new Topics());
         }
-#else
-        topics = reinterpret_cast<void *>(new Topics());
-#endif
         thread = std::thread(ServiceThread, this, address, port, exceptionHandler, messageHandler);
     }
 
@@ -2083,19 +2085,18 @@ namespace mqtt {
     void Service::Publish(
         const std::string &topicName,
         const std::vector<uint8_t> &payload,
-#ifndef SERVICE_OPERATION_MODE_QUEUE
         uint8_t requestedQoS,
-        bool retain
-#else
-        uint8_t requestedQoS
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+        bool retain,
 #endif
+        bool handle
     ) {
         if (payload.size() > SERVICE_PAYLOAD_SIZE_LIMIT) {
             throw std::runtime_error("Payload size limit violated");
         }
         {
             std::lock_guard<std::mutex> lock(access);
-            if (payloads.size() < SERVICE_RECEIVED_PAYLOADS_LIMIT) {
+            if ((payloads.size() < SERVICE_RECEIVED_PAYLOADS_LIMIT) && (!handle || (publishHandler == nullptr) || publishHandler(topicName, payload))) {
                 payloads.push_back({
                     topicName,
                     payload,
@@ -2107,7 +2108,7 @@ namespace mqtt {
 #endif
                 });
             } else {
-                throw std::runtime_error("Payloads limit exceeded");
+                throw std::runtime_error("Payload cannot be published");
             }
         }
 #ifndef SERVICE_OPERATION_MODE_QUEUE
@@ -2309,7 +2310,7 @@ namespace mqtt {
 #endif
                     printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] published to \"" + topicName + "\"");
                 } catch (...) {
-                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\", payloads limit exceeded");
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] failed to publish to \"" + topicName + "\"");
                     throw NoPacketException();
                 }
                 switch (requestedQoS) {

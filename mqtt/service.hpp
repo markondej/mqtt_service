@@ -18,6 +18,7 @@ namespace mqtt {
 
     class Service {
     public:
+        using PublishHandler = std::function<bool(const std::string &topicName, const std::vector<uint8_t>&payload) noexcept>;
         using MessageHandler = std::function<void(const std::string &message) noexcept>;
         using ExceptionHandler = std::function<void(const std::exception &exception) noexcept>;
         Service(
@@ -26,6 +27,7 @@ namespace mqtt {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
             const std::string &filename = SERVICE_DEFAULT_TOPICS_FILENAME,
 #endif
+            const PublishHandler &publishHandler = nullptr,
             const ExceptionHandler &exceptionHandler = nullptr,
             const MessageHandler &messageHandler = nullptr
         );
@@ -36,12 +38,11 @@ namespace mqtt {
         void Publish(
             const std::string &topicName,
             const std::vector<uint8_t> &payload,
-#ifndef SERVICE_OPERATION_MODE_QUEUE
             uint8_t requestedQoS = 0,
-            bool retain = false
-#else
-            uint8_t requestedQoS = 0
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+            bool retain = false,
 #endif
+            bool handle = true
         );
         bool IsEnabled() const;
         void Disable() noexcept;
@@ -53,6 +54,7 @@ namespace mqtt {
             const ExceptionHandler &exceptionHandler,
             const MessageHandler &messageHandler
         ) noexcept;
+        PublishHandler publishHandler;
         std::atomic_bool enabled;
         std::vector<Payload> payloads;
         std::thread thread;
