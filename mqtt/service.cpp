@@ -742,8 +742,11 @@ namespace mqtt {
 
     class String {
     public:
-        String() : string() { }
-        String(const std::string &string) : string(string) { }
+        String() { }
+        String(const std::string &string) {
+            data.resize(string.size());
+            std::memcpy(data.data(), string.data(), string.size());
+        }
         String(const uint8_t *stream, uint32_t length) {
             if (length < 2) {
                 throw std::invalid_argument("Cannot create MQTT string from stream, data stream to short");
@@ -752,27 +755,32 @@ namespace mqtt {
             if (length < static_cast<unsigned>(size + 2)) {
                 throw std::invalid_argument("Cannot create MQTT string from stream, data stream to short");
             }
-            string.resize(size);
-            for (unsigned i = 0; i < size; i++) {
-                string[i] = stream[i + 2];
-            }
+            data.resize(size);
+            std::memcpy(data.data(), &(stream[2]), size);
         }
         operator std::vector<uint8_t>() const {
             std::vector<uint8_t> stream;
             stream.resize(GetSize());
-            stream[0] = (string.size() >> 8) & 0xFF;
-            stream[1] = string.size() & 0xFF;
-            std::memcpy(&(stream.data()[2]), string.data(), string.size());
+            stream[0] = (data.size() >> 8) & 0xFF;
+            stream[1] = data.size() & 0xFF;
+            std::memcpy(&(stream.data()[2]), data.data(), data.size());
             return stream;
         }
         operator std::string() const {
+            std::string string;
+            for (uint8_t byte : data) {
+                string += static_cast<char>(byte);
+            }
             return string;
         }
+        inline const std::vector<uint8_t>GetData() {
+            return data;
+        }
         uint16_t GetSize() const {
-            return static_cast<uint16_t>(string.size() + 2);
+            return static_cast<uint16_t>(data.size() + 2);
         }
     private:
-        std::string string;
+        std::vector<uint8_t> data;
     };
 
     class Connections {
@@ -881,7 +889,8 @@ namespace mqtt {
             bool userName, password, willRetain, willQoS1, willQoS2, willFlag, cleanSession;
         };
         struct ConnectParams {
-            std::string clientId, willTopic, willMessage, userName, password;
+            std::string clientId, userName, password, willTopic;
+            std::vector<uint8_t> willMessage;
             uint16_t keepAlive;
         };
         enum class ConnectResponse {
@@ -1148,7 +1157,7 @@ namespace mqtt {
                                 static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_FLAG),
                                 static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_CLEAN_SESSION)
                             };
-                            ConnectParams params = { clientId, willTopic, willMessage, userName, password, keepAlive };
+                            ConnectParams params = { clientId, userName, password, willTopic, willMessage.GetData(), keepAlive };
                             returnCode = GetConnectReturnCode(connect(connectionId, flags, params, sessionPresent));
                         } catch (...) {
                             return Packet(MQTT_CONTROL_PACKET_TYPE_CONNACK, MQTT_REQUIRED_FLAGS_CONNACK, std::vector<uint8_t>({ 0x0, MQTT_CONNACK_RETURN_CODE_REFUSED_UNAVAILABLE }));
@@ -1188,10 +1197,6 @@ namespace mqtt {
                     }
                     if (flags.qos1 && flags.qos2) {
                         throw DisconnectException("PUBLISH: invalid QoS value");
-                    }
-                    std::size_t found = static_cast<std::string>(topicName).find("*");
-                    if (found != std::string::npos) {
-                        throw DisconnectException("PUBLISH: invalid topic name");
                     }
                     if ((publish != nullptr) && connected) {
                         PublishResponse response = publish(connectionId, packetIdentifier, topicName, payload, flags);
@@ -1433,8 +1438,15 @@ namespace mqtt {
     public:
         struct Client {
             uint64_t connectionId;
-            uint16_t keepAlive, packetIdSeq;
             std::string clientId;
+            uint16_t keepAlive, packetIdSeq;
+            bool willFlag;
+            std::string willTopic;
+            std::vector<uint8_t> willPayload;
+            uint8_t willQoS;
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+            bool willRetain;
+#endif
             std::vector<uint16_t> packetIds;
         };
         Clients() { }
@@ -1450,14 +1462,41 @@ namespace mqtt {
             }
             throw std::runtime_error("Client does not exist");
         }
-        Client Add(uint64_t connectionId, const std::string &clientId, uint16_t keepAlive) {
+        Client Add(
+            uint64_t connectionId,
+            const std::string &clientId,
+            uint16_t keepAlive,
+            bool willFlag = false,
+            const std::string &willTopic = std::string(),
+            const std::vector<uint8_t> &willPayload = { },
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+            uint8_t willRequestedQoS = 0,
+            bool willRetain = false
+#else
+            uint8_t willRequestedQoS = 0
+#endif
+        ) {
             std::lock_guard<std::mutex> lock(access);
             for (Client &client : clients) {
                 if (client.connectionId == connectionId) {
                     throw std::runtime_error("Duplicated connection identifier");
                 }
             }
-            clients.push_back({ connectionId, keepAlive ? keepAlive : static_cast<uint16_t>(SERVICE_DEFAULT_KEEP_ALIVE_TIME), 0, clientId });
+            clients.push_back({
+                connectionId,
+                clientId,
+                keepAlive ? keepAlive : static_cast<uint16_t>(SERVICE_DEFAULT_KEEP_ALIVE_TIME),
+                0,
+                willFlag,
+                willTopic,
+                willPayload,
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+                willRequestedQoS,
+                willRetain
+#else
+                willRequestedQoS
+#endif
+            });
             return *std::prev(clients.end());
         }
         void Delete(uint64_t connectionId) {
@@ -2165,16 +2204,35 @@ namespace mqtt {
                     printMessage("Connection refused [\"" + params.clientId + "\":" + std::to_string(connectionId) + "], authorization not supported");
                     return Server::ConnectResponse::RefusedBadCredentials;
                 }
-                if (flags.willFlag) {
-                    printMessage("Connection refused [\"" + params.clientId + "\":" + std::to_string(connectionId) + "], Will not supported");
-                    return Server::ConnectResponse::RefusedUnavailable;
-                }
-                Clients::Client client = clients.Add(connectionId, params.clientId, params.keepAlive);
+                Clients::Client client = clients.Add(
+                    connectionId,
+                    params.clientId,
+                    params.keepAlive,
+                    flags.willFlag,
+                    params.willTopic,
+                    params.willMessage,
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+                    (static_cast<uint8_t>(flags.willQoS2) << 1) | static_cast<uint8_t>(flags.willQoS1),
+                    flags.willRetain
+#else
+                    (static_cast<uint8_t>(flags.willQoS2) << 1) | static_cast<uint8_t>(flags.willQoS1)
+#endif
+                );
                 printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] connected");
                 return Server::ConnectResponse::Accepted;
             });
             server.SetDisconnectHandler([&](uint64_t connectionId, bool graceful) {
                 Clients::Client client = clients.Get(connectionId);
+                if (!graceful && client.willFlag) {
+                    try {
+#ifndef SERVICE_OPERATION_MODE_QUEUE
+                        instance->Publish(client.willTopic, client.willPayload, client.willQoS, client.willRetain);
+#else
+                        instance->Publish(client.willTopic, client.willPayload, client.willQoS);
+#endif
+                        printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] published to \"" + client.willTopic + "\"");
+                    } catch (...) { }
+                }
                 for (std::string &topicName : topics->UnsubscribeAll(connectionId)) {
                     printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] unsubscribed from \"" + topicName + "\"");
                 }

@@ -26,5 +26,4 @@ To compile service in "queue" mode define "SERVICE_OPERATION_MODE_QUEUE".
 
 ## To be done:
 * Topic wildcards support
-* Client's Will support
 * Permanent client sessions
