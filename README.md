@@ -1,8 +1,8 @@
 # Light MQTT Service
 
-Light MQTT is light cross-platform MQTT broker, written in C++, designed for specialized use. It is compatible with MQTT 3.1.1 clients.
+Light MQTT is light cross-platform MQTT broker library written in C++. It is MQTT 3.1.1 compatible, designed for standalone and embedded use.
 
-It may be easily embedded into custom applications, eg:
+It may be easily integrated with custom applications, eg:
 ```
 #include "mqtt/service.hpp"
 #include <iostream>
