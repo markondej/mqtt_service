@@ -158,19 +158,19 @@ namespace mqtt {
     };
 
 #endif
-    class AddressIP {
+    class IPAddress {
     public:
         enum class Type {
             IPv4,
             IPv6,
             Unknown
         };
-        AddressIP() {
+        IPAddress() {
             address = reinterpret_cast<sockaddr *>(new sockaddr_in);
             std::memset(address, 0, sizeof(sockaddr_in));
             (reinterpret_cast<sockaddr_in *>(address))->sin_family = AF_INET;
         }
-        AddressIP(const std::string &address, Type type = Type::Unknown) : AddressIP() {
+        IPAddress(const std::string &address, Type type = Type::Unknown) : IPAddress() {
             auto init = [&](Type type) {
                 switch (type) {
                 case Type::IPv6:
@@ -210,16 +210,16 @@ namespace mqtt {
                 Resolve(address, type);
             }
         }
-        AddressIP(const std::string &address, uint16_t port, Type type = Type::Unknown) : AddressIP(address, type) {
+        IPAddress(const std::string &address, uint16_t port, Type type = Type::Unknown) : IPAddress(address, type) {
             SetPort(port);
         }
-        AddressIP(unsigned long address) : AddressIP() {
+        IPAddress(unsigned long address) : IPAddress() {
             (reinterpret_cast<sockaddr_in *>(this->address))->sin_addr.s_addr = htonl(address);
         }
-        AddressIP(unsigned long address, uint16_t port) : AddressIP(address) {
+        IPAddress(unsigned long address, uint16_t port) : IPAddress(address) {
             SetPort(port);
         }
-        AddressIP(const AddressIP &source) {
+        IPAddress(const IPAddress &source) {
             switch (source.GetType()) {
             case Type::IPv6:
                 address = reinterpret_cast<sockaddr *>(new sockaddr_in6);
@@ -231,16 +231,16 @@ namespace mqtt {
                 std::memcpy(address, source.address, sizeof(sockaddr_in));
             }
         }
-        AddressIP(AddressIP &&source) {
+        IPAddress(IPAddress &&source) {
             address = source.address;
             source.address = reinterpret_cast<sockaddr *>(new sockaddr_in);
             std::memset(source.address, 0, sizeof(sockaddr_in));
             (reinterpret_cast<sockaddr_in *>(source.address))->sin_family = AF_INET;
         }
-        virtual ~AddressIP() {
+        virtual ~IPAddress() {
             delete address;
         }
-        AddressIP &operator=(const AddressIP &source) {
+        IPAddress &operator=(const IPAddress &source) {
             delete address;
             switch (source.GetType()) {
             case Type::IPv6:
@@ -254,7 +254,7 @@ namespace mqtt {
             }
             return *this;
         }
-        AddressIP &operator=(AddressIP &&source) {
+        IPAddress &operator=(IPAddress &&source) {
             delete address;
             address = source.address;
             source.address = reinterpret_cast<sockaddr *>(new sockaddr_in);
@@ -262,7 +262,7 @@ namespace mqtt {
             (reinterpret_cast<sockaddr_in *>(source.address))->sin_family = AF_INET;
             return *this;
         }
-        AddressIP &Resolve(const std::string &address, Type type = Type::IPv4) {
+        IPAddress &Resolve(const std::string &address, Type type = Type::IPv4) {
 #ifdef _WIN32
             WinSock::Initialize();
 #endif
@@ -387,7 +387,7 @@ namespace mqtt {
     public:
         struct Event {
             uint64_t connectionId;
-            AddressIP address;
+            IPAddress address;
             enum class Type {
                 Connected,
                 Disconnected,
@@ -416,13 +416,13 @@ namespace mqtt {
 #ifdef _WIN32
             WinSock::Initialize();
 #endif
-            AddressIP server(address, port);
+            IPAddress server(address, port);
 
             MQTT_SERVER_SOCKET conn, sock;
 #ifdef _WIN32
-            if ((sock = socket(AddressIP::GetFamily(server.GetType()), SOCK_STREAM, IPPROTO_TCP)) == INVALID_SOCKET) {
+            if ((sock = socket(IPAddress::GetFamily(server.GetType()), SOCK_STREAM, IPPROTO_TCP)) == INVALID_SOCKET) {
 #else
-            if ((sock = socket(AddressIP::GetFamily(server.GetType()), SOCK_STREAM, IPPROTO_TCP)) == MQTT_SERVER_SOCKET_ERROR) {
+            if ((sock = socket(IPAddress::GetFamily(server.GetType()), SOCK_STREAM, IPPROTO_TCP)) == MQTT_SERVER_SOCKET_ERROR) {
 #endif
                 throw std::runtime_error("Cannot enable service (socket error)");
             }
@@ -481,7 +481,7 @@ namespace mqtt {
             };
 
             while (enabled) {
-                AddressIP client(server);
+                IPAddress client(server);
 #ifdef _WIN32
                 int length = client.GetSockAddrLength();
 #else
@@ -545,7 +545,7 @@ namespace mqtt {
         };
         class Client {
         public:
-            Client(MQTT_SERVER_SOCKET sock, const AddressIP &address, uint64_t connectionId, const EventHandler &handler) : enabled(true), connectionId(connectionId) {
+            Client(MQTT_SERVER_SOCKET sock, const IPAddress &address, uint64_t connectionId, const EventHandler &handler) : enabled(true), connectionId(connectionId) {
                 thread = std::thread(ClientThread, this, sock, address, handler);
             }
             Client(const Client &) = delete;
@@ -567,7 +567,7 @@ namespace mqtt {
                 return connectionId;
             }
         private:
-            static void ClientThread(Client *instance, MQTT_SERVER_SOCKET sock, const AddressIP &address, EventHandler handleEvent) noexcept {
+            static void ClientThread(Client *instance, MQTT_SERVER_SOCKET sock, const IPAddress &address, EventHandler handleEvent) noexcept {
                 Event event = { instance->connectionId, address, Event::Type::Connected };
                 InputStream input = { new uint8_t[MQTT_SERVER_RECV_BUFFER_LENGTH], 0 };
                 OutputStream output; output.data = nullptr; output.disconnect = false; bool delay = false;
@@ -787,13 +787,13 @@ namespace mqtt {
     public:
         struct Connection {
             uint64_t id;
-            AddressIP address;
+            IPAddress address;
             bool connected;
             std::chrono::time_point<std::chrono::system_clock> timestamp;
             std::vector<uint8_t> input, output;
             uint16_t keepAlive;
         };
-        Connection Add(uint64_t connectionId, const AddressIP &address, bool &connected) {
+        Connection Add(uint64_t connectionId, const IPAddress &address, bool &connected) {
             connected = false;
             std::lock_guard<std::mutex> lock(access);
             for (auto connection = connections.begin(); connection != connections.end(); connection++) {
@@ -817,7 +817,7 @@ namespace mqtt {
                 connection++;
             }
             if (connection == connections.end()) {
-                return { 0, AddressIP(), false, std::chrono::system_clock::now(), std::vector<uint8_t>(), std::vector<uint8_t>(), 0 };
+                return { 0, IPAddress(), false, std::chrono::system_clock::now(), std::vector<uint8_t>(), std::vector<uint8_t>(), 0 };
             }
             Connection previous = *connection;
             connection->input.clear();
@@ -866,7 +866,7 @@ namespace mqtt {
             }
             throw std::runtime_error("Incorrect connection identifier");
         }
-        AddressIP GetAddress(uint64_t connectionId) {
+        IPAddress GetAddress(uint64_t connectionId) {
             std::lock_guard<std::mutex> lock(access);
             for (Connection &connection : connections) {
                 if (connection.id == connectionId) {
@@ -1045,8 +1045,8 @@ namespace mqtt {
             connections.Send(connectionId, publish);
         }
         std::string GetAddress(uint64_t connectionId) {
-            AddressIP address = connections.GetAddress(connectionId);
-            if ((address.GetType() == AddressIP::Type::IPv4) && (reinterpret_cast<sockaddr_in *>(address.GetSockAddr())->sin_addr.s_addr == htonl(INADDR_ANY))) {
+            IPAddress address = connections.GetAddress(connectionId);
+            if ((address.GetType() == IPAddress::Type::IPv4) && (reinterpret_cast<sockaddr_in *>(address.GetSockAddr())->sin_addr.s_addr == htonl(INADDR_ANY))) {
                 throw std::invalid_argument("Cannot obtain connection address");
             }
             return address;
