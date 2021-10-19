@@ -20,7 +20,7 @@ std::vector<uint8_t> GeneratePayload(const std::string &string) {
 };
 
 #ifndef _WIN32
-void sigIntHandler(int sigNum)
+void signalHandler(int sigNum)
 {
     if (service && service->IsEnabled()) {
         service->Disable();
@@ -52,8 +52,8 @@ int main(int argc, char** argv)
 #endif
 
 #ifndef _WIN32
-    std::signal(SIGINT, sigIntHandler);
-    std::signal(SIGTSTP, sigIntHandler);
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTSTP, signalHandler);
 
     int result = 0;
 #else
