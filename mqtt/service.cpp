@@ -148,11 +148,11 @@ namespace mqtt {
             WSADATA wsaData;
             int error = WSAStartup(MAKEWORD(2, 2), &wsaData);
             if (error != NO_ERROR) {
-                throw std::runtime_error("Cannot initialize WinSock!");
+                throw std::runtime_error("Cannot initialize WinSock");
             }
             if ((LOBYTE(wsaData.wVersion) != 2) || (HIBYTE(wsaData.wVersion) != 2)) {
                 WSACleanup();
-                throw std::runtime_error("Cannot initialize WinSock!");
+                throw std::runtime_error("Cannot initialize WinSock");
             }
         }
     };
@@ -179,7 +179,7 @@ namespace mqtt {
                     (reinterpret_cast<sockaddr_in6 *>(this->address))->sin6_family = AF_INET6;
                     if (inet_pton(AF_INET6, address.c_str(), &(reinterpret_cast<sockaddr_in6 *>(this->address))->sin6_addr) <= 0) {
                         delete this->address;
-                        throw std::runtime_error("Incorrect IPv6 address provided!");
+                        throw std::runtime_error("Incorrect IPv6 address provided");
                     }
                     break;
                 case Type::IPv4:
@@ -189,7 +189,7 @@ namespace mqtt {
                     (reinterpret_cast<sockaddr_in *>(this->address))->sin_family = AF_INET;
                     if (inet_pton(AF_INET, address.c_str(), &(reinterpret_cast<sockaddr_in *>(this->address))->sin_addr) <= 0) {
                         delete this->address;
-                        throw std::runtime_error("Incorrect IPv4 address provided!");
+                        throw std::runtime_error("Incorrect IPv4 address provided");
                     }
                 }
             };
@@ -2470,6 +2470,8 @@ namespace mqtt {
             instance->enabled = false;
         }
         server.Disable();
-        serverThread.join();
+        if (serverThread.joinable()) {
+            serverThread.join();
+        }
     }
 }

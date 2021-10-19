@@ -70,14 +70,13 @@ int main(int argc, char** argv)
 #endif
             nullptr,
             [&](const std::exception &exception) {
-#ifndef _WIN32
-            console.Print(exception.what());
-#else
-            MessageBox(NULL, exception.what(), "Error", MB_OK | MB_ICONERROR);
+                console.Print(exception.what());
+#ifdef _WIN32
+                MessageBox(NULL, exception.what(), "Error", MB_OK | MB_ICONERROR);
 #endif
-        }, [&](const std::string &message) {
-            console.Print(message);
-        }));
+            }, [&](const std::string &message) {
+                console.Print(message);
+            }));
 #ifndef _WIN32
         while (service->IsEnabled()) {
             std::this_thread::sleep_for(std::chrono::microseconds(CONSOLE_NOP_DELAY));
