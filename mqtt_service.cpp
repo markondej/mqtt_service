@@ -8,9 +8,11 @@ using Console = ConsoleWindow;
 #endif
 #include <cstring>
 
+#ifndef _WIN32
 #define CONSOLE_NOP_DELAY 1000
+#endif
 
-std::shared_ptr<mqtt::Service> service;
+mqtt::Service *service = nullptr;
 
 std::vector<uint8_t> GeneratePayload(const std::string &string) {
     std::vector<uint8_t> payload;
@@ -22,7 +24,7 @@ std::vector<uint8_t> GeneratePayload(const std::string &string) {
 #ifndef _WIN32
 void signalHandler(int sigNum)
 {
-    if (service && service->IsEnabled()) {
+    if ((service != nullptr) && service->IsEnabled()) {
         service->Disable();
     }
 }
@@ -60,9 +62,22 @@ int main(int argc, char** argv)
     WPARAM result = 1;
 #endif
 
+    Console *console = nullptr;
+
+    auto finally = [&]() {
+        if (service != nullptr) {
+            delete service;
+            service = nullptr;
+        }
+        if (console != nullptr) {
+            delete console;
+            console = nullptr;
+        }
+    };
+
     try {
-        Console console;
-        service = std::shared_ptr<mqtt::Service>(new mqtt::Service(
+        console = new Console();
+        service = new mqtt::Service(
             address,
             port,
 #ifndef SERVICE_OPERATION_MODE_QUEUE
@@ -70,13 +85,17 @@ int main(int argc, char** argv)
 #endif
             nullptr,
             [&](const std::exception &exception) {
-                console.Print(exception.what());
+                if (console != nullptr) {
+                    console->Print(exception.what());
+                }
 #ifdef _WIN32
                 MessageBox(NULL, exception.what(), "Error", MB_OK | MB_ICONERROR);
 #endif
             }, [&](const std::string &message) {
-                console.Print(message);
-            }));
+                if (console != nullptr) {
+                    console->Print(message);
+                }
+            });
 #ifndef _WIN32
         while (service->IsEnabled()) {
             std::this_thread::sleep_for(std::chrono::microseconds(CONSOLE_NOP_DELAY));
@@ -86,8 +105,10 @@ int main(int argc, char** argv)
 #endif
     } catch (...) {
 #ifndef _WIN32
+        finally();
         return 1;
 #endif
     }
+    finally();
     return result;
 }

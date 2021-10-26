@@ -333,11 +333,11 @@ namespace mqtt {
         uint16_t GetPort() const {
             switch (GetType()) {
             case Type::IPv6:
-                return (reinterpret_cast<sockaddr_in6 *>(address))->sin6_port;
+                return ntohs((reinterpret_cast<sockaddr_in6 *>(address))->sin6_port);
                 break;
             case Type::IPv4:
             default:
-                return (reinterpret_cast<sockaddr_in *>(address))->sin_port;
+                return ntohs((reinterpret_cast<sockaddr_in *>(address))->sin_port);
             }
         }
         Type GetType() const {
@@ -976,6 +976,9 @@ namespace mqtt {
         }
         Server(const Server &) = delete;
         Server(Server &&) = delete;
+        virtual ~Server() {
+            Disable();
+        }
         Server &operator=(const Server &) = delete;
         void Enable(const std::string &address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT) {
             tcp.Enable(address, port, connections);
