@@ -976,6 +976,9 @@ namespace mqtt {
         }
         Server(const Server &) = delete;
         Server(Server &&) = delete;
+        virtual ~Server() {
+            Disable();
+        }
         Server &operator=(const Server &) = delete;
         void Enable(const std::string &address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT) {
             tcp.Enable(address, port, connections);
