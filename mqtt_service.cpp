@@ -9,7 +9,7 @@ using Console = ConsoleWindow;
 #include <cstring>
 
 #ifndef _WIN32
-#define CONSOLE_NOP_DELAY 1000
+#define CONSOLE_NOP_DELAY 500000
 #endif
 
 mqtt::Service *service = nullptr;
