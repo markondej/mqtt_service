@@ -333,11 +333,11 @@ namespace mqtt {
         uint16_t GetPort() const {
             switch (GetType()) {
             case Type::IPv6:
-                return (reinterpret_cast<sockaddr_in6 *>(address))->sin6_port;
+                return ntohs((reinterpret_cast<sockaddr_in6 *>(address))->sin6_port);
                 break;
             case Type::IPv4:
             default:
-                return (reinterpret_cast<sockaddr_in *>(address))->sin_port;
+                return ntohs((reinterpret_cast<sockaddr_in *>(address))->sin_port);
             }
         }
         Type GetType() const {
