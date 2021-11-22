@@ -66,12 +66,14 @@ int main(int argc, char** argv)
 
     auto finally = [&]() {
         if (service != nullptr) {
-            delete service;
+            auto temp = service;
             service = nullptr;
+            delete temp;
         }
         if (console != nullptr) {
-            delete console;
+            auto temp = console;
             console = nullptr;
+            delete temp;
         }
     };
 
