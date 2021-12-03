@@ -11,7 +11,7 @@ all: mqtt_service.o service.o
 	g++ -lpthread -latomic -o $(EXECUTABLE) mqtt_service.o service.o
 
 install: $(EXECUTABLE)
-	install $(EXECUTABLE) /usr/sbin
+	install $(EXECUTABLE) /usr/local/bin
 	cp mqtt_service.service /lib/systemd/system
 	sed -i 's/{EXECUTABLE}/$(EXECUTABLE)/g' /lib/systemd/system/mqtt_service.service
 	sed -i 's/{PRODUCT_NAME}/$(PRODUCT_NAME)/g' /lib/systemd/system/mqtt_service.service

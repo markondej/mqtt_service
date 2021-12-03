@@ -4,7 +4,7 @@ Documentation=https://github.com/markondej/mqtt_service
 After=network.target
 
 [Service]
-ExecStart=/usr/sbin/{EXECUTABLE}
+ExecStart=/usr/local/bin/{EXECUTABLE}
 
 [Install]
 WantedBy=multi-user.target
