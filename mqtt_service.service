@@ -1,10 +1,10 @@
 [Unit]
 Description={PRODUCT_NAME}
-Documentation=https://www.github.com/markondej/mqtt_service
+Documentation=https://github.com/markondej/mqtt_service
 After=network.target
 
 [Service]
-ExecStart=/usr/sbin/{EXECUTABLE}
+ExecStart=/usr/local/bin/{EXECUTABLE}
 
 [Install]
 WantedBy=multi-user.target
