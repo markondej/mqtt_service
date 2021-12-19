@@ -18,7 +18,9 @@ namespace mqtt {
 
     class Service {
     public:
-        using PublishHandler = std::function<bool(const std::string &topicName, const std::vector<uint8_t>&payload) noexcept>;
+        using ConnectHandler = std::function<bool(const std::string &clientId) noexcept>;
+        using DisconnectHandler = std::function<void(const std::string &clientId) noexcept>;
+        using PublishHandler = std::function<bool(const std::string &clientId, const std::string &topicName, const std::vector<uint8_t>&payload) noexcept>;
         using MessageHandler = std::function<void(const std::string &message) noexcept>;
         using ExceptionHandler = std::function<void(const std::exception &exception) noexcept>;
         Service(
@@ -27,6 +29,8 @@ namespace mqtt {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
             const std::string &filename = SERVICE_DEFAULT_TOPICS_FILENAME,
 #endif
+            const ConnectHandler &connectHandler = nullptr,
+            const DisconnectHandler &disconnectHandler = nullptr,
             const PublishHandler &publishHandler = nullptr,
             const ExceptionHandler &exceptionHandler = nullptr,
             const MessageHandler &messageHandler = nullptr
@@ -36,6 +40,7 @@ namespace mqtt {
         Service &operator=(const Service &) = delete;
         virtual ~Service();
         void Publish(
+            const std::string &clientId,
             const std::string &topicName,
             const std::vector<uint8_t> &payload,
             uint8_t requestedQoS = 0,
@@ -54,6 +59,8 @@ namespace mqtt {
             const ExceptionHandler &exceptionHandler,
             const MessageHandler &messageHandler
         ) noexcept;
+        ConnectHandler connectHandler;
+        DisconnectHandler disconnectHandler;
         PublishHandler publishHandler;
         std::atomic_bool enabled;
         std::vector<Payload> payloads;
