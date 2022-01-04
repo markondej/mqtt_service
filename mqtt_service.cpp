@@ -57,7 +57,7 @@ int main(int argc, char** argv)
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTSTP, signalHandler);
 
-    int result = 0;
+    int result = 0;s
 #else
     WPARAM result = 1;
 #endif
@@ -85,6 +85,8 @@ int main(int argc, char** argv)
 #ifndef SERVICE_OPERATION_MODE_QUEUE
             filename,
 #endif
+            nullptr,
+            nullptr,
             nullptr,
             [&](const std::exception &exception) {
                 if (console != nullptr) {
