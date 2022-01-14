@@ -57,25 +57,12 @@ int main(int argc, char** argv)
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTSTP, signalHandler);
 
-    int result = 0;
+    int result = EXIT_SUCCESS;
 #else
     WPARAM result = 1;
 #endif
 
     Console *console = nullptr;
-
-    auto finally = [&]() {
-        if (service != nullptr) {
-            auto temp = service;
-            service = nullptr;
-            delete temp;
-        }
-        if (console != nullptr) {
-            auto temp = console;
-            console = nullptr;
-            delete temp;
-        }
-    };
 
     try {
         console = new Console();
@@ -107,10 +94,19 @@ int main(int argc, char** argv)
 #endif
     } catch (...) {
 #ifndef _WIN32
-        finally();
-        return 1;
+        result = EXIT_FAILURE;
 #endif
     }
-    finally();
+
+    if (service != nullptr) {
+        auto temp = service;
+        service = nullptr;
+        delete temp;
+    }
+    if (console != nullptr) {
+        auto temp = console;
+        console = nullptr;
+        delete temp;
+    }
     return result;
 }
