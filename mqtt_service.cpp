@@ -73,6 +73,8 @@ int main(int argc, char** argv)
             filename,
 #endif
             nullptr,
+            nullptr,
+            nullptr,
             [&](const std::exception &exception) {
                 if (console != nullptr) {
                     console->Print(exception.what());

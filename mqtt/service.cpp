@@ -55,10 +55,12 @@ using std::min;
 
 #ifdef _WIN32
 #define MQTT_SERVER_SOCKET SOCKET
+#define MQTT_SERVER_SOCKLEN int
 #define MQTT_SERVER_SOCKET_ERROR SOCKET_ERROR
 #define MQTT_SERVER_CLOSESOCKET closesocket
 #else
 #define MQTT_SERVER_SOCKET int
+#define MQTT_SERVER_SOCKLEN socklen_t
 #define MQTT_SERVER_SOCKET_ERROR -1
 #define MQTT_SERVER_CLOSESOCKET close
 #endif
@@ -352,11 +354,7 @@ namespace mqtt {
         sockaddr *GetSockAddr() const {
             return address;
         }
-#ifdef _WIN32
-        int GetSockAddrLength() const {
-#else
-        socklen_t GetSockAddrLength() const {
-#endif
+        MQTT_SERVER_SOCKLEN GetSockAddrLength() const {
             switch (GetType()) {
             case Type::IPv6:
                 return sizeof(sockaddr_in6);
@@ -487,11 +485,7 @@ namespace mqtt {
 
             while (enabled) {
                 IPAddress client(server);
-#ifdef _WIN32
-                int length = client.GetSockAddrLength();
-#else
-                socklen_t length = client.GetSockAddrLength();
-#endif
+                MQTT_SERVER_SOCKLEN length = client.GetSockAddrLength();
                 if ((UpdateClients() >= connections) ||
 #ifdef _WIN32
                     ((conn = accept(sock, client.GetSockAddr(), &length)) == INVALID_SOCKET)
@@ -1115,6 +1109,9 @@ namespace mqtt {
                         clientId = String(&packet.GetData()[offset], static_cast<uint32_t>(packet.GetData().size() - offset));
                     } catch (...) {
                         throw DisconnectException("CONNECT: malformed client identifier");
+                    }
+                    if (clientId.GetData().empty()) {
+                        throw DisconnectException("CONNECT: client identifier cannot be empty");
                     }
                     offset += clientId.GetSize();
                     String willTopic, willMessage;
@@ -2056,11 +2053,13 @@ namespace mqtt {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
         const std::string &filename,
 #endif
+        const ConnectHandler &connectHandler,
+        const DisconnectHandler &disconnectHandler,
         const PublishHandler &publishHandler,
         const ExceptionHandler &exceptionHandler,
         const MessageHandler &messageHandler
     )
-        : publishHandler(publishHandler), enabled(true), topics(nullptr)
+        : connectHandler(connectHandler), disconnectHandler(disconnectHandler), publishHandler(publishHandler), enabled(true), topics(nullptr)
     {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
         if (!filename.empty()) {
@@ -2091,6 +2090,7 @@ namespace mqtt {
     }
 
     void Service::Publish(
+        const std::string &clientId,
         const std::string &topicName,
         const std::vector<uint8_t> &payload,
         uint8_t requestedQoS,
@@ -2104,7 +2104,7 @@ namespace mqtt {
         }
         {
             std::lock_guard<std::mutex> lock(access);
-            if ((payloads.size() < SERVICE_RECEIVED_PAYLOADS_LIMIT) && (!handle || (publishHandler == nullptr) || publishHandler(topicName, payload))) {
+            if ((payloads.size() < SERVICE_RECEIVED_PAYLOADS_LIMIT) && (!handle || (publishHandler == nullptr) || publishHandler(clientId, topicName, payload))) {
                 payloads.push_back({
                     topicName,
                     payload,
@@ -2213,21 +2213,35 @@ namespace mqtt {
                     printMessage("Connection refused [\"" + params.clientId + "\":" + std::to_string(connectionId) + "], authorization not supported");
                     return Server::ConnectResponse::RefusedBadCredentials;
                 }
-                Clients::Client client = clients.Add(
-                    connectionId,
-                    params.clientId,
-                    params.keepAlive,
-                    flags.willFlag,
-                    params.willTopic,
-                    params.willMessage,
+                {
+                    std::lock_guard<std::mutex> lock(instance->access);
+                    if ((instance->connectHandler != nullptr) && !instance->connectHandler(params.clientId)) {
+                        return Server::ConnectResponse::RefusedIdentifier;
+                    }
+                }
+                try {
+                    Clients::Client client = clients.Add(
+                        connectionId,
+                        params.clientId,
+                        params.keepAlive,
+                        flags.willFlag,
+                        params.willTopic,
+                        params.willMessage,
 #ifndef SERVICE_OPERATION_MODE_QUEUE
-                    (static_cast<uint8_t>(flags.willQoS2) << 1) | static_cast<uint8_t>(flags.willQoS1),
-                    flags.willRetain
+                        (static_cast<uint8_t>(flags.willQoS2) << 1) | static_cast<uint8_t>(flags.willQoS1),
+                        flags.willRetain
 #else
-                    (static_cast<uint8_t>(flags.willQoS2) << 1) | static_cast<uint8_t>(flags.willQoS1)
+                        (static_cast<uint8_t>(flags.willQoS2) << 1) | static_cast<uint8_t>(flags.willQoS1)
 #endif
-                );
-                printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] connected");
+                    );
+                    printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] connected");
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(instance->access);
+                    if (instance->disconnectHandler != nullptr) {
+                        instance->disconnectHandler(params.clientId);
+                    }
+                    throw;
+                }
                 return Server::ConnectResponse::Accepted;
             });
             server.SetDisconnectHandler([&](uint64_t connectionId, bool graceful) {
@@ -2235,9 +2249,9 @@ namespace mqtt {
                 if (!graceful && client.willFlag) {
                     try {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
-                        instance->Publish(client.willTopic, client.willPayload, client.willQoS, client.willRetain);
+                        instance->Publish(client.clientId, client.willTopic, client.willPayload, client.willQoS, client.willRetain);
 #else
-                        instance->Publish(client.willTopic, client.willPayload, client.willQoS);
+                        instance->Publish(client.clientId, client.willTopic, client.willPayload, client.willQoS);
 #endif
                         printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] published to \"" + client.willTopic + "\"");
                     } catch (...) { }
@@ -2251,7 +2265,7 @@ namespace mqtt {
 #else
                 for (uint16_t packetId : published.RemoveAll(connectionId, [&](const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS) noexcept {
                     try {
-                        instance->Publish(topicName, payload, requestedQoS);
+                        instance->Publish(client.clientId, topicName, payload, requestedQoS);
                     } catch (...) { }
                 })) {
 #endif
@@ -2259,6 +2273,12 @@ namespace mqtt {
                 }
                 receivedQoS2.Unregister(connectionId);
                 clients.Delete(connectionId);
+                {
+                    std::lock_guard<std::mutex> lock(instance->access);
+                    if (instance->disconnectHandler != nullptr) {
+                        instance->disconnectHandler(client.clientId);
+                    }
+                }
                 printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] disconnected");
             });
             server.SetSubscribeHandler([&](uint64_t connectionId, const std::string &topicFilter, uint8_t requestedQoS) -> Server::SubscribeResponse {
@@ -2312,9 +2332,9 @@ namespace mqtt {
                 }
                 try {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
-                    instance->Publish(topicName, payload, requestedQoS, flags.retain);
+                    instance->Publish(client.clientId, topicName, payload, requestedQoS, flags.retain);
 #else
-                    instance->Publish(topicName, payload, requestedQoS);
+                    instance->Publish(client.clientId, topicName, payload, requestedQoS);
 #endif
                     printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] published to \"" + topicName + "\"");
                 } catch (...) {
