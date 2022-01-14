@@ -55,10 +55,12 @@ using std::min;
 
 #ifdef _WIN32
 #define MQTT_SERVER_SOCKET SOCKET
+#define MQTT_SERVER_SOCKLEN int
 #define MQTT_SERVER_SOCKET_ERROR SOCKET_ERROR
 #define MQTT_SERVER_CLOSESOCKET closesocket
 #else
 #define MQTT_SERVER_SOCKET int
+#define MQTT_SERVER_SOCKLEN socklen_t
 #define MQTT_SERVER_SOCKET_ERROR -1
 #define MQTT_SERVER_CLOSESOCKET close
 #endif
@@ -352,11 +354,7 @@ namespace mqtt {
         sockaddr *GetSockAddr() const {
             return address;
         }
-#ifdef _WIN32
-        int GetSockAddrLength() const {
-#else
-        socklen_t GetSockAddrLength() const {
-#endif
+        MQTT_SERVER_SOCKLEN GetSockAddrLength() const {
             switch (GetType()) {
             case Type::IPv6:
                 return sizeof(sockaddr_in6);
@@ -366,11 +364,16 @@ namespace mqtt {
             }
         }
         static inline bool IsCorrect(const std::string &address, Type type = Type::IPv4) {
-            return (type == Type::IPv4) ?
-                std::regex_match(address, std::regex("^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")) :
-                std::regex_match(address, std::regex("^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$"));
+            switch (type) {
+            case Type::IPv4:
+                return std::regex_match(address, std::regex("^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"));
+            case Type::IPv6:
+                return std::regex_match(address, std::regex("^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$"));
+            default:
+                return IsCorrect(address, Type::IPv4) || IsCorrect(address, Type::IPv6);
+            }
         }
-        static int GetFamily(Type type) {
+        static inline int GetFamily(Type type) {
             switch (type) {
             case Type::IPv6:
                 return AF_INET6;
@@ -482,11 +485,7 @@ namespace mqtt {
 
             while (enabled) {
                 IPAddress client(server);
-#ifdef _WIN32
-                int length = client.GetSockAddrLength();
-#else
-                socklen_t length = client.GetSockAddrLength();
-#endif
+                MQTT_SERVER_SOCKLEN length = client.GetSockAddrLength();
                 if ((UpdateClients() >= connections) ||
 #ifdef _WIN32
                     ((conn = accept(sock, client.GetSockAddr(), &length)) == INVALID_SOCKET)
