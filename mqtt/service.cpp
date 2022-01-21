@@ -658,7 +658,6 @@ namespace mqtt {
 
     class Packet {
     public:
-        Packet() = delete;
         Packet(uint8_t packetType, uint8_t flags, const std::vector<uint8_t> &data) : packetType(packetType), flags(flags), data(data) {
             uint32_t remLenValue = static_cast<uint32_t>(data.size());
             do {
@@ -1518,6 +1517,7 @@ namespace mqtt {
         std::vector<std::pair<uint64_t, unsigned long long>> GetAvailablePacketsCount() {
             std::vector<std::pair<uint64_t, unsigned long long>> available;
             std::lock_guard<std::mutex> lock(access);
+            available.reserve(clients.size());
             for (Client &client : clients) {
                 available.push_back({ client.connectionId, SERVICE_PUBLISHED_PAYLOADS_LIMIT - client.packetIds.size() });
             }
@@ -1705,6 +1705,7 @@ namespace mqtt {
         std::vector<std::pair<std::string, std::vector<Payload::Recipient>>> GetSubscriptions() {
             std::vector<std::pair<std::string, std::vector<Payload::Recipient>>> subscriptions;
             std::lock_guard<std::mutex> lock(access);
+            subscriptions.reserve(topics.size());
             for (Topic &topic : topics) {
                 subscriptions.push_back({ topic.name, topic.subscriptions });
             }
