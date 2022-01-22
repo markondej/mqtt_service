@@ -1518,6 +1518,7 @@ namespace mqtt {
         std::vector<std::pair<uint64_t, unsigned long long>> GetAvailablePacketsCount() {
             std::vector<std::pair<uint64_t, unsigned long long>> available;
             std::lock_guard<std::mutex> lock(access);
+            available.reserve(clients.size());
             for (Client &client : clients) {
                 available.push_back({ client.connectionId, SERVICE_PUBLISHED_PAYLOADS_LIMIT - client.packetIds.size() });
             }
@@ -1705,6 +1706,7 @@ namespace mqtt {
         std::vector<std::pair<std::string, std::vector<Payload::Recipient>>> GetSubscriptions() {
             std::vector<std::pair<std::string, std::vector<Payload::Recipient>>> subscriptions;
             std::lock_guard<std::mutex> lock(access);
+            subscriptions.reserve(topics.size());
             for (Topic &topic : topics) {
                 subscriptions.push_back({ topic.name, topic.subscriptions });
             }
