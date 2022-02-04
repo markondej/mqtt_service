@@ -126,15 +126,8 @@ LRESULT AboutWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexc
         }
         hDC = BeginPaint(hWnd, &paint);
         if (hDC != NULL) {
-            HPEN hPen = CreatePen(PS_SOLID, 1, RGB(0xff, 0xff, 0xff));
-            if (hPen != NULL) {
-                HGDIOBJ hOldPen = SelectObject(hDC, hPen);
-                HGDIOBJ hOldBrush = SelectObject(hDC, hBackground);
-                Rectangle(hDC, 0, 0, clientArea.right, GetScaled(80, false));
-                SelectObject(hDC, hOldBrush);
-                SelectObject(hDC, hOldPen);
-                DeleteObject(hPen);
-            }
+            RECT backRect = { 0, 0, clientArea.right, GetScaled(80, false) };
+            FillRect(hDC, &backRect, hBackground);
 
             BITMAP bitmap;
             HDC hCompDC = CreateCompatibleDC(hDC);
