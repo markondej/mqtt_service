@@ -658,7 +658,6 @@ namespace mqtt {
 
     class Packet {
     public:
-        Packet() = delete;
         Packet(uint8_t packetType, uint8_t flags, const std::vector<uint8_t> &data) : packetType(packetType), flags(flags), data(data) {
             uint32_t remLenValue = static_cast<uint32_t>(data.size());
             do {
