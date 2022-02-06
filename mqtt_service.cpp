@@ -12,7 +12,6 @@ using Console = ConsoleWindow;
 #define CONSOLE_NOP_DELAY 500000
 #endif
 
-Console *console = nullptr;
 mqtt::Service *service = nullptr;
 
 std::vector<uint8_t> GeneratePayload(const std::string &string) {
@@ -63,6 +62,8 @@ int main(int argc, char** argv)
     WPARAM result = 1;
 #endif
 
+    Console *console = nullptr;
+
     try {
         console = new Console();
         service = new mqtt::Service(
@@ -105,9 +106,7 @@ int main(int argc, char** argv)
         delete temp;
     }
     if (console != nullptr) {
-        auto temp = console;
-        console = nullptr;
-        delete temp;
+        delete console;
     }
     return result;
 }
