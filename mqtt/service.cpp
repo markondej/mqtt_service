@@ -724,7 +724,7 @@ namespace mqtt {
                     packets.push_back(Packet(&(stream.data()[consumed]), static_cast<unsigned>(stream.size() - consumed)));
                     consumed += std::prev(packets.end())->GetSize();
                 } catch (NoPacketException &) {
-                    std::memcpy(stream.data(), &(stream.data()[consumed]), consumed);
+                    std::memcpy(stream.data(), &(stream.data()[consumed]), stream.size() - consumed);
                     stream.resize(stream.size() - consumed);
                     return packets;
                 } catch (...) {
