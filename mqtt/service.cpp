@@ -1180,15 +1180,15 @@ namespace mqtt {
                         throw DisconnectException("PUBLISH: malformed topic name");
                     }
                     offset += topicName.GetSize();
-                    if (packet.GetData().size() < offset + 2) {
-                        throw DisconnectException("PUBLISH: invalid packet length");
-                    }
                     PublishFlags flags = {
                         static_cast<bool>(packet.GetFlags() & MQTT_PUBLISH_FLAG_DUP),
                         static_cast<bool>(packet.GetFlags() & MQTT_PUBLISH_FLAG_QOS1),
                         static_cast<bool>(packet.GetFlags() & MQTT_PUBLISH_FLAG_QOS2),
                         static_cast<bool>(packet.GetFlags() & MQTT_PUBLISH_FLAG_RETAIN)
                     };
+                    if (packet.GetData().size() < offset + ((flags.qos1 || flags.qos2) ? 2 : 0)) {
+                        throw DisconnectException("PUBLISH: invalid packet length");
+                    }
                     uint16_t packetIdentifier = 0;
                     if (flags.qos1 || flags.qos2) {
                         packetIdentifier = packet.GetData()[offset++] << 8;
