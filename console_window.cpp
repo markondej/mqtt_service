@@ -9,7 +9,8 @@
 #define CONSOLE_WINDOW_WIDTH 450
 #define CONSOLE_WINDOW_HEIGHT 330
 #define CONSOLE_WINDOW_BREAK_LINE "\r\n"
-#define CONSOLE_WINDOW_LINES 300
+#define CONSOLE_WINDOW_MIN_LINES 450
+#define CONSOLE_WINDOW_MAX_LINES 500
 
 #define ID_CONSOLE_EDIT 201
 
@@ -88,11 +89,13 @@ void ConsoleWindow::Print(const std::string& text, bool appendTs)
 
 void ConsoleWindow::AddText(const std::string& text)
 {
-    int erase = 0;
+    std::size_t erase = 0;
     textLines.push_back(text);
-    if (textLines.size() > CONSOLE_WINDOW_LINES) {
-        erase = static_cast<int>(textLines[0].size() + std::string(CONSOLE_WINDOW_BREAK_LINE).size());
-        textLines.erase(textLines.begin());
+    if (textLines.size() > CONSOLE_WINDOW_MAX_LINES) {
+        for (std::size_t i = 0; i < textLines.size() - CONSOLE_WINDOW_MIN_LINES; i++) {
+            erase += textLines[i].size() + std::string(CONSOLE_WINDOW_BREAK_LINE).size();
+        }
+        textLines.erase(textLines.begin(), textLines.begin() + textLines.size() - CONSOLE_WINDOW_MIN_LINES);
     }
     HWND hEdit = GetDlgItem(hWnd, ID_CONSOLE_EDIT);
     if (hEdit != NULL) {
@@ -186,7 +189,7 @@ LRESULT ConsoleWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noe
                     Save(filename);
                     AddText(std::string("Log exported to: ") + filename);
                 } catch (std::exception &catched) {
-                    MessageBox(NULL, catched.what(), "Console", MB_OK | MB_ICONERROR);
+                    MessageBox(hWnd, catched.what(), "Console", MB_OK | MB_ICONERROR);
                 }
             }
             break;
