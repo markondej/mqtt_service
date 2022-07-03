@@ -8,7 +8,7 @@ ifeq ($(QUEUE), 1)
 endif
 
 all: mqtt_service.o service.o
-	g++ -lpthread -latomic -o $(EXECUTABLE) mqtt_service.o service.o
+	g++ -o $(EXECUTABLE) mqtt_service.o service.o -lpthread -latomic 
 
 install: $(EXECUTABLE)
 	install $(EXECUTABLE) /usr/local/bin
