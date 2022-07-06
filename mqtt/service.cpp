@@ -721,10 +721,10 @@ namespace mqtt {
             std::vector<Packet> packets;
             while (true) {
                 try {
-                    packets.push_back(Packet(&(stream.data()[consumed]), static_cast<unsigned>(stream.size() - consumed)));
+                    packets.push_back(Packet(&stream[consumed], static_cast<unsigned>(stream.size() - consumed)));
                     consumed += std::prev(packets.end())->GetSize();
                 } catch (NoPacketException &) {
-                    std::memcpy(stream.data(), &(stream.data()[consumed]), stream.size() - consumed);
+                    std::memcpy(stream.data(), &stream[consumed], stream.size() - consumed);
                     stream.resize(stream.size() - consumed);
                     return packets;
                 } catch (...) {
@@ -761,7 +761,7 @@ namespace mqtt {
             stream.resize(GetSize());
             stream[0] = (data.size() >> 8) & 0xFF;
             stream[1] = data.size() & 0xFF;
-            std::memcpy(&(stream.data()[2]), data.data(), data.size());
+            std::memcpy(&stream[2], data.data(), data.size());
             return stream;
         }
         operator std::string() const {
@@ -932,7 +932,7 @@ namespace mqtt {
                 connected = connection.connected;
                 auto size = connection.input.size();
                 connection.input.resize(size + input.length);
-                std::memcpy(&(connection.input.data()[size]), input.data, input.length);
+                std::memcpy(&connection.input[size], input.data, input.length);
                 auto now = std::chrono::system_clock::now();
                 if (!connection.input.empty()) {
                     for (Packet &packet : Packet::feedList(connection.input)) {
@@ -1034,7 +1034,7 @@ namespace mqtt {
                 data[offset++] = packetId >> 8;
                 data[offset++] = packetId & 0xFF;
             }
-            std::memcpy(&(data.data()[offset]), payload.data(), payload.size());
+            std::memcpy(&data[offset], payload.data(), payload.size());
             Packet publish(
                 MQTT_CONTROL_PACKET_TYPE_PUBLISH,
                 (flags.dup ? MQTT_PUBLISH_FLAG_DUP : 0x0) |
