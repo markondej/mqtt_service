@@ -658,6 +658,7 @@ namespace mqtt {
 
     class Packet {
     public:
+        Packet() = delete;
         Packet(uint8_t packetType, uint8_t flags, const std::vector<uint8_t> &data) : packetType(packetType), flags(flags), data(data) {
             uint32_t remLenValue = static_cast<uint32_t>(data.size());
             do {
@@ -1568,7 +1569,7 @@ namespace mqtt {
                 }
             }
         }
-        unsigned long long Count() {
+        std::size_t Count() {
             std::lock_guard<std::mutex> lock(access);
             return clients.size();
         }
@@ -1698,7 +1699,7 @@ namespace mqtt {
             }
             return unsubscribed;
         }
-        unsigned long long Count() {
+        std::size_t Count() {
             std::lock_guard<std::mutex> lock(access);
             return topics.size();
         }
@@ -1784,7 +1785,7 @@ namespace mqtt {
                         if (read.size() >= topicNameSize) {
                             current = DataType::PayloadSize;
                             topicName.clear();
-                            for (unsigned long long j = 0; j < read.size(); j++) {
+                            for (std::size_t j = 0; j < read.size(); j++) {
                                 topicName += read[j];
                             }
                             read.clear();
@@ -1883,7 +1884,7 @@ namespace mqtt {
             }
             throw std::runtime_error("Incorrect packet identifier");
         }
-        unsigned long long Count() {
+        std::size_t Count() {
             std::lock_guard<std::mutex> lock(access);
             return payloads.size();
         }
@@ -2469,7 +2470,7 @@ namespace mqtt {
 
         try {
             auto statusTimestamp = std::chrono::system_clock::now();
-            unsigned long long publishedCount = 0;
+            std::size_t publishedCount = 0;
             while (instance->enabled) {
                 bool processing = false;
                 auto payloads = getPublished();
