@@ -52,6 +52,7 @@ using std::min;
 
 #define MQTT_SERVER_SERVER_NOP_DELAY 1000
 #define MQTT_SERVER_CLIENT_NOP_DELAY 1000
+#define MQTT_SERVER_ATOMIC_FLAG_LOCK_NOP_DELAY 100
 
 #ifdef _WIN32
 #define MQTT_SERVER_SOCKET SOCKET
@@ -405,17 +406,32 @@ namespace mqtt {
             bool disconnect;
         };
         using EventHandler = std::function<void(const Event &connection, const InputStream &input, OutputStream &output)>;
-        TCPServer() : enabled(false) { }
+        TCPServer() : enabled(false), ready(true), eventHandler(nullptr) { }
+        virtual ~TCPServer() {
+            Disable();
+            while (!ready.load(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_SERVER_NOP_DELAY));
+            }
+            EventHandler *handle = eventHandler.load(std::memory_order_consume);
+            if (handle != nullptr) {
+                delete handle;
+            }
+        }
         TCPServer(const TCPServer &) = delete;
         TCPServer(TCPServer &&) = delete;
         TCPServer &operator=(const TCPServer &) = delete;
         void SetEventHandler(const EventHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            handleEvent = handler;
+            EventHandler *required = nullptr, *desired = new EventHandler(handler);
+            if (!eventHandler.compare_exchange_strong(required, desired, std::memory_order_relaxed, std::memory_order_relaxed)) {
+                delete desired;
+            }
         }
-        void Enable(const std::string address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT) {
-            std::lock_guard<std::mutex> lock(access);
-            assert(handleEvent != nullptr);
+        void Enable(const std::string &address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT) {
+            bool required = true;
+            if (!ready.compare_exchange_strong(required, false, std::memory_order_relaxed, std::memory_order_relaxed)) {
+                throw std::runtime_error("Cannot enable service (already enabled)");
+            }
+
 #ifdef _WIN32
             WinSock::Initialize();
 #endif
@@ -464,7 +480,7 @@ namespace mqtt {
                 throw std::runtime_error("Cannot enable service (listen error)");
             }
 
-            enabled = true;
+            enabled.store(true, std::memory_order_relaxed);
             uint64_t id = ULLONG_MAX;
             auto getNextId = [&]() -> uint64_t {
                 for (uint64_t nextId = id + 1; nextId != id; nextId++) {
@@ -483,7 +499,7 @@ namespace mqtt {
                 throw std::runtime_error("Cannot generate connection identifier");
             };
 
-            while (enabled) {
+            while (enabled.load(std::memory_order_relaxed)) {
                 IPAddress client(server);
                 MQTT_SERVER_SOCKLEN length = client.GetSockAddrLength();
                 if ((UpdateClients() >= connections) ||
@@ -501,7 +517,7 @@ namespace mqtt {
                     continue;
                 }
                 try {
-                    clients.push_back(new Client(conn, client, getNextId(), handleEvent));
+                    clients.push_back(new Client(conn, client, getNextId(), eventHandler));
                 } catch (...) {
 #ifdef _WIN32
                     shutdown(conn, SD_BOTH);
@@ -521,12 +537,17 @@ namespace mqtt {
             }
 
             MQTT_SERVER_CLOSESOCKET(sock);
+
+            ready.store(true, std::memory_order_relaxed);
         }
         void Disable() {
-            enabled = false;
+            enabled.store(false, std::memory_order_relaxed);
         }
         bool IsEnabled() const {
-            return enabled;
+            return enabled.load(std::memory_order_relaxed);
+        }
+        bool IsReady() const {
+            return ready.load(std::memory_order_relaxed);
         }
     private:
         unsigned UpdateClients() {
@@ -544,8 +565,8 @@ namespace mqtt {
         };
         class Client {
         public:
-            Client(MQTT_SERVER_SOCKET sock, const IPAddress &address, uint64_t connectionId, const EventHandler &handler) : enabled(true), connectionId(connectionId) {
-                thread = std::thread(ClientThread, this, sock, address, handler);
+            Client(MQTT_SERVER_SOCKET sock, const IPAddress &address, uint64_t connectionId, const std::atomic<EventHandler *> &eventHandler) : enabled(true), connectionId(connectionId) {
+                thread = std::thread(ClientThread, this, sock, address, &eventHandler);
             }
             Client(const Client &) = delete;
             Client(Client &&) = delete;
@@ -558,6 +579,7 @@ namespace mqtt {
                 if (thread.joinable()) {
                     thread.join();
                 }
+
             }
             inline bool IsEnabled() const {
                 return enabled;
@@ -566,7 +588,7 @@ namespace mqtt {
                 return connectionId;
             }
         private:
-            static void ClientThread(Client *instance, MQTT_SERVER_SOCKET sock, const IPAddress &address, EventHandler handleEvent) noexcept {
+            static void ClientThread(Client *instance, MQTT_SERVER_SOCKET sock, const IPAddress &address, const std::atomic<EventHandler *> *eventHandler) noexcept {
                 Event event = { instance->connectionId, address, Event::Type::Connected };
                 InputStream input = { new uint8_t[MQTT_SERVER_RECV_BUFFER_LENGTH], 0 };
                 OutputStream output; output.data = nullptr; output.disconnect = false; bool delay = false;
@@ -600,7 +622,10 @@ namespace mqtt {
                     delay = !input.length;
                     try {
                         output.disconnect = false;
-                        handleEvent(event, input, output);
+                        EventHandler *handle = eventHandler->load(std::memory_order_consume);
+                        if (handle != nullptr) {
+                            (*handle)(event, input, output);
+                        }
                         input.length = 0;
                     } catch (...) {
                         instance->enabled = false;
@@ -621,7 +646,10 @@ namespace mqtt {
                 }
                 try {
                     output.disconnect = true;
-                    handleEvent(event, input, output);
+                    EventHandler *handle = eventHandler->load(std::memory_order_consume);
+                    if (handle != nullptr) {
+                        (*handle)(event, input, output);
+                    }
                     if (output.data != nullptr) {
                         delete[] output.data;
                     }
@@ -632,10 +660,9 @@ namespace mqtt {
             std::atomic_bool enabled;
             std::atomic_uint64_t connectionId;
         };
-        EventHandler handleEvent;
         std::vector<Client *> clients;
-        std::atomic_bool enabled;
-        std::mutex access;
+        std::atomic_bool enabled, ready;
+        std::atomic<EventHandler *> eventHandler;
     };
 
     class DisconnectException : public std::exception {
@@ -782,6 +809,24 @@ namespace mqtt {
         std::vector<uint8_t> data;
     };
 
+    class AtomicMutex {
+    public:
+        AtomicMutex() = default;
+        AtomicMutex(const AtomicMutex&) = delete;
+        AtomicMutex(AtomicMutex&&) = delete;
+        AtomicMutex &operator=(const AtomicMutex&) = delete;
+        void lock() {
+            while (semaphore.test_and_set(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_ATOMIC_FLAG_LOCK_NOP_DELAY));
+            }
+        }
+        void unlock() {
+            semaphore.clear(std::memory_order_relaxed);
+        }
+    private:
+        std::atomic_flag semaphore;
+    };
+
     class Connections {
     public:
         struct Connection {
@@ -794,7 +839,8 @@ namespace mqtt {
         };
         Connection Add(uint64_t connectionId, const IPAddress &address, bool &connected) {
             connected = false;
-            std::lock_guard<std::mutex> lock(access);
+            bool expected = false;
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto connection = connections.begin(); connection != connections.end(); connection++) {
                 if (connection->id == connectionId) {
                     connected = connection->connected;
@@ -807,7 +853,7 @@ namespace mqtt {
             return connection;
         }
         Connection ClearBuffers(uint64_t connectionId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             auto connection = connections.begin();
             while (connection != connections.end()) {
                 if (connection->id == connectionId) {
@@ -824,7 +870,7 @@ namespace mqtt {
             return previous;
         }
         void Update(const Connection &updated, bool connected, bool packetHandled, const std::chrono::time_point<std::chrono::system_clock> &timestamp) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             auto connection = connections.begin();
             while (connection != connections.end()) {
                 if (connection->id == updated.id) {
@@ -845,7 +891,7 @@ namespace mqtt {
             connection->input = updated.input;
         }
         Connection Delete(uint64_t connectionId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto connection = connections.begin(); connection != connections.end(); connection++) {
                 if (connection->id == connectionId) {
                     Connection deleted = *connection;
@@ -856,7 +902,7 @@ namespace mqtt {
             throw std::runtime_error("Incorrect connection identifier");
         }
         void Send(uint64_t connectionId, const std::vector<uint8_t> &data) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Connection &connection : connections) {
                 if (connection.id == connectionId) {
                     connection.output.insert(connection.output.end(), data.begin(), data.end());
@@ -866,7 +912,7 @@ namespace mqtt {
             throw std::runtime_error("Incorrect connection identifier");
         }
         IPAddress GetAddress(uint64_t connectionId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Connection &connection : connections) {
                 if (connection.id == connectionId) {
                     return connection.address;
@@ -875,11 +921,11 @@ namespace mqtt {
             throw std::runtime_error("Incorrect connection identifier");
         }
     private:
-        std::mutex access;
+        AtomicMutex access;
         std::vector<Connection> connections;
     };
 
-    class Server {
+    class Server : private TCPServer {
     public:
         struct PublishFlags {
             bool dup, qos1, qos2, retain;
@@ -917,13 +963,16 @@ namespace mqtt {
         using PubackHandler = std::function<void(uint64_t connectionId, uint16_t packetId)>;
         using SubscribeHandler = std::function<SubscribeResponse(uint64_t connectionId, const std::string &topicFilter, uint8_t requestedQoS)>;
         using UnsubscribeHandler = std::function<void(uint64_t connectionId, const std::string &topicFilter)>;
-        Server() {
-            tcp.SetEventHandler([&](const TCPServer::Event &event, const TCPServer::InputStream &input, TCPServer::OutputStream &output) {
+        Server() : publish(nullptr), connect(nullptr), disconnect(nullptr), subscribe(nullptr), unsubscribe(nullptr), puback(nullptr), pubrec(nullptr), pubrel(nullptr), pubcomp(nullptr) {
+            SetEventHandler([&](const TCPServer::Event &event, const TCPServer::InputStream &input, TCPServer::OutputStream &output) {
                 bool connected = false, handled = false;
                 auto connection = (event.type == TCPServer::Event::Type::Connected) ? connections.Add(event.connectionId, event.address, connected) : connections.ClearBuffers(event.connectionId);
-                if (connected && (disconnect != nullptr)) {
+                if (connected) {
                     try {
-                        disconnect(event.connectionId, false);
+                        DisconnectHandler *handle = disconnect.load(std::memory_order_consume);
+                        if (handle != nullptr) {
+                            (*handle)(event.connectionId, false);
+                        }
                     } catch (...) { }
                 }
                 if (connection.input.size() + input.length > MQTT_BUFFER_MAX_LENGTH) {
@@ -965,64 +1014,106 @@ namespace mqtt {
                 }
                 if (event.type == TCPServer::Event::Type::Disconnected) {
                     auto deleted = connections.Delete(event.connectionId);
-                    if (deleted.connected && (disconnect != nullptr)) {
+                    if (deleted.connected) {
                         try {
-                            disconnect(event.connectionId, false);
+                            DisconnectHandler *handle = disconnect.load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                (*handle)(event.connectionId, false);
+                            }
                         } catch (...) { }
                     }
                 }
             });
         }
-        Server(const Server &) = delete;
-        Server(Server &&) = delete;
         virtual ~Server() {
             Disable();
+            while (!IsReady()) {
+                std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_SERVER_NOP_DELAY));
+            }
+            PublishHandler *publishHandler = publish.load(std::memory_order_consume);
+            if (publishHandler != nullptr) {
+                delete publishHandler;
+            }               
+            ConnectHandler *connectHandler = connect.load(std::memory_order_consume);
+            if (connectHandler != nullptr) {
+                delete connectHandler;
+            }
+            DisconnectHandler *disconnectHandler = disconnect.load(std::memory_order_consume);
+            if (disconnectHandler != nullptr) {
+                delete disconnectHandler;
+            }
+            SubscribeHandler *subscribeHandler = subscribe.load(std::memory_order_consume);
+            if (subscribeHandler != nullptr) {
+                delete subscribeHandler;
+            }
+            UnsubscribeHandler *unsubscribeHandler = unsubscribe.load(std::memory_order_consume);
+            if (unsubscribeHandler != nullptr) {
+                delete unsubscribeHandler;
+            }
+            PubackHandler *pubackHandler = puback.load(std::memory_order_consume);
+            if (pubackHandler != nullptr) {
+                delete pubackHandler;
+            }
+            PubackHandler *pubrecHandler = pubrec.load(std::memory_order_consume);
+            if (pubrecHandler != nullptr) {
+                delete pubrecHandler;
+            }
+            PubackHandler* pubrelHandler = pubrel.load(std::memory_order_consume);
+            if (pubrelHandler != nullptr) {
+                delete pubrelHandler;
+            }
+            PubackHandler *pubcompHandler = pubcomp.load(std::memory_order_consume);
+            if (pubcompHandler != nullptr) {
+                delete pubcompHandler;
+            }
         }
-        Server &operator=(const Server &) = delete;
         void Enable(const std::string &address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT) {
-            tcp.Enable(address, port, connections);
+            TCPServer::Enable(address, port, connections);
         }
-        void Disable() noexcept {
-            tcp.Disable();
+        void Disable() {
+            TCPServer::Disable();
         }
-        inline bool IsEnabled() const {
-            return tcp.IsEnabled();
+        bool IsEnabled() const {
+            return TCPServer::IsEnabled();
         }
         void SetConnectHandler(const ConnectHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            connect = handler;
+            ConnectHandler *current = connect.load(std::memory_order_consume);
+            if (current != nullptr) {
+                return;
+            }
+            connect.store(new ConnectHandler(handler), std::memory_order_relaxed);
         }
         void SetDisconnectHandler(const DisconnectHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            disconnect = handler;
+            DisconnectHandler *current = disconnect.load(std::memory_order_consume);
+            if (current != nullptr) {
+                return;
+            }
+            disconnect.store(new DisconnectHandler(handler), std::memory_order_relaxed);
         }
         void SetPublishHandler(const PublishHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            publish = handler;
+            PublishHandler *current = publish.load(std::memory_order_consume);
+            if (current != nullptr) {
+                return;
+            }
+            publish.store(new PublishHandler(handler), std::memory_order_relaxed);
         }
         void SetPubackHandler(const PubackHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            puback = handler;
+            puback.store(new PubackHandler(handler), std::memory_order_relaxed);
         }
         void SetPubrecHandler(const PubackHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            pubrec = handler;
+            pubrec.store(new PubackHandler(handler), std::memory_order_relaxed);
         }
         void SetPubrelHandler(const PubackHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            pubrel = handler;
+            pubrel.store(new PubackHandler(handler), std::memory_order_relaxed);
         }
         void SetPubcompHandler(const PubackHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            pubcomp = handler;
+            pubcomp.store(new PubackHandler(handler), std::memory_order_relaxed);
         }
         void SetSubscribeHandler(const SubscribeHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            subscribe = handler;
+            subscribe.store(new SubscribeHandler(handler), std::memory_order_relaxed);
         }
         void SetUnsubscribeHandler(const UnsubscribeHandler &handler) {
-            std::lock_guard<std::mutex> lock(access);
-            unsubscribe = handler;
+            unsubscribe.store(new UnsubscribeHandler(handler), std::memory_order_relaxed);
         }
         void Publish(uint64_t connectionId, uint16_t packetId, const std::string &topicName, const std::vector<uint8_t> &payload, const PublishFlags &flags) {
             unsigned offset = 0;
@@ -1151,19 +1242,22 @@ namespace mqtt {
                     uint8_t returnCode = MQTT_CONNACK_RETURN_CODE_ACCEPTED;
                     if ((static_cast<std::string>(protocolName) != MQTT_CONNECT_PROTOCOL_NAME) || (protocolLevel != MQTT_CONNECT_PROTOCOL_LEVEL) || connected || (offset < packet.GetData().size())) {
                         return Packet(MQTT_CONTROL_PACKET_TYPE_CONNACK, MQTT_REQUIRED_FLAGS_CONNACK, std::vector<uint8_t>({ 0x0, MQTT_CONNACK_RETURN_CODE_REFUSED_PROTOCOL }));
-                    } else if (connect != nullptr) {
+                    } else {
                         try {
-                            ConnectFlags flags = {
-                                static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_USER_NAME),
-                                static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_PASSWORD),
-                                static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_RETAIN),
-                                static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_QOS1),
-                                static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_QOS2),
-                                static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_FLAG),
-                                static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_CLEAN_SESSION)
-                            };
-                            ConnectParams params = { clientId, userName, password, willTopic, willMessage.GetData(), keepAlive };
-                            returnCode = GetConnectReturnCode(connect(connectionId, flags, params, sessionPresent));
+                            ConnectHandler handle = *connect.load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                ConnectFlags flags = {
+                                    static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_USER_NAME),
+                                    static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_PASSWORD),
+                                    static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_RETAIN),
+                                    static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_QOS1),
+                                    static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_QOS2),
+                                    static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_WILL_FLAG),
+                                    static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_CLEAN_SESSION)
+                                };
+                                ConnectParams params = { clientId, userName, password, willTopic, willMessage.GetData(), keepAlive };
+                                returnCode = GetConnectReturnCode(handle(connectionId, flags, params, sessionPresent));
+                            }
                         } catch (...) {
                             return Packet(MQTT_CONTROL_PACKET_TYPE_CONNACK, MQTT_REQUIRED_FLAGS_CONNACK, std::vector<uint8_t>({ 0x0, MQTT_CONNACK_RETURN_CODE_REFUSED_UNAVAILABLE }));
                         }
@@ -1203,15 +1297,23 @@ namespace mqtt {
                     if (flags.qos1 && flags.qos2) {
                         throw DisconnectException("PUBLISH: invalid QoS value");
                     }
-                    if ((publish != nullptr) && connected) {
-                        PublishResponse response = publish(connectionId, packetIdentifier, topicName, payload, flags);
-                        switch (response) {
-                        case PublishResponse::QoS1:
-                            return Packet(MQTT_CONTROL_PACKET_TYPE_PUBACK, MQTT_REQUIRED_FLAGS_PUBACK, { static_cast<uint8_t>(packetIdentifier >> 8), static_cast<uint8_t>(packetIdentifier & 0xFF) });
-                        case PublishResponse::QoS2:
-                            return Packet(MQTT_CONTROL_PACKET_TYPE_PUBREC, MQTT_REQUIRED_FLAGS_PUBREC, { static_cast<uint8_t>(packetIdentifier >> 8), static_cast<uint8_t>(packetIdentifier & 0xFF) });
-                        default:
-                            break;
+                    if (connected) {
+                        try {
+                            PublishResponse response = PublishResponse::QoS0;
+                            PublishHandler handle = *publish.load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                PublishResponse response = handle(connectionId, packetIdentifier, topicName, payload, flags);
+                            }
+                            switch (response) {
+                            case PublishResponse::QoS1:
+                                return Packet(MQTT_CONTROL_PACKET_TYPE_PUBACK, MQTT_REQUIRED_FLAGS_PUBACK, { static_cast<uint8_t>(packetIdentifier >> 8), static_cast<uint8_t>(packetIdentifier & 0xFF) });
+                            case PublishResponse::QoS2:
+                                return Packet(MQTT_CONTROL_PACKET_TYPE_PUBREC, MQTT_REQUIRED_FLAGS_PUBREC, { static_cast<uint8_t>(packetIdentifier >> 8), static_cast<uint8_t>(packetIdentifier & 0xFF) });
+                            default:
+                                break;
+                            }
+                        } catch (...) {
+                            throw DisconnectException("PUBLISH: internal server error");
                         }
                     }
                     throw NoPacketException();
@@ -1226,8 +1328,15 @@ namespace mqtt {
                     }
                     uint16_t packetIdentifier = packet.GetData()[offset++] << 8;
                     packetIdentifier |= packet.GetData()[offset++];
-                    if ((puback != nullptr) && connected) {
-                        puback(connectionId, packetIdentifier);
+                    if (connected) {
+                        try {
+                            PubackHandler handle = *puback.load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                handle(connectionId, packetIdentifier);
+                            }
+                        } catch (...) {
+                            throw DisconnectException("PUBACK: internal server error");
+                        }
                     }
                     throw NoPacketException();
                 }
@@ -1241,8 +1350,15 @@ namespace mqtt {
                     }
                     uint16_t packetIdentifier = packet.GetData()[offset++] << 8;
                     packetIdentifier |= packet.GetData()[offset++];
-                    if ((pubrel != nullptr) && connected) {
-                        pubrel(connectionId, packetIdentifier);
+                    if (connected) {
+                        try {
+                            PubackHandler handle = *pubrel.load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                handle(connectionId, packetIdentifier);
+                            }
+                        } catch (...) {
+                            throw DisconnectException("PUBREL: internal server error");
+                        }
                     }
                     return Packet(MQTT_CONTROL_PACKET_TYPE_PUBCOMP, MQTT_REQUIRED_FLAGS_PUBCOMP, { static_cast<uint8_t>(packetIdentifier >> 8), static_cast<uint8_t>(packetIdentifier & 0xFF) });
                 }
@@ -1256,8 +1372,15 @@ namespace mqtt {
                     }
                     uint16_t packetIdentifier = packet.GetData()[offset++] << 8;
                     packetIdentifier |= packet.GetData()[offset++];
-                    if ((pubrec != nullptr) && connected) {
-                        pubrec(connectionId, packetIdentifier);
+                    if (connected) {
+                        try {
+                            PubackHandler handle = *pubrec.load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                handle(connectionId, packetIdentifier);
+                            }
+                        } catch (...) {
+                            throw DisconnectException("PUBREC: internal server error");
+                        }
                     }
                     return Packet(MQTT_CONTROL_PACKET_TYPE_PUBREL, MQTT_REQUIRED_FLAGS_PUBREL, { static_cast<uint8_t>(packetIdentifier >> 8), static_cast<uint8_t>(packetIdentifier & 0xFF) });
                 }
@@ -1271,8 +1394,15 @@ namespace mqtt {
                     }
                     uint16_t packetIdentifier = packet.GetData()[offset++] << 8;
                     packetIdentifier |= packet.GetData()[offset++];
-                    if ((pubcomp != nullptr) && connected) {
-                        pubcomp(connectionId, packetIdentifier);
+                    if (connected) {
+                        try {
+                            PubackHandler handle = *pubcomp.load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                handle(connectionId, packetIdentifier);
+                            }
+                        } catch (...) {
+                            throw DisconnectException("PUBCOMP: internal server error");
+                        }
                     }
                     throw NoPacketException();
                 }
@@ -1316,11 +1446,16 @@ namespace mqtt {
                         throw NoPacketException();
                     }
                     for (SubscribeRequest &request : requests) {
-                        if (subscribe != nullptr) {
-                            result.push_back(GetSubscribeReturnCode(subscribe(connectionId, request.topicFilter, request.requestedQoS)));
-                            continue;
+                        try {
+                            SubscribeHandler handle = *subscribe.load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                result.push_back(GetSubscribeReturnCode(handle(connectionId, request.topicFilter, request.requestedQoS)));
+                                continue;
+                            }
+                            result.push_back(MQTT_SUBACK_RETURN_CODE_FAILURE);
+                        } catch (...) {
+                            result.push_back(MQTT_SUBACK_RETURN_CODE_FAILURE);
                         }
-                        result.push_back(MQTT_SUBACK_RETURN_CODE_FAILURE);
                     }
                     return Packet(MQTT_CONTROL_PACKET_TYPE_SUBACK, MQTT_REQUIRED_FLAGS_SUBACK, result);
                 }
@@ -1354,11 +1489,14 @@ namespace mqtt {
                     if (!connected) {
                         throw NoPacketException();
                     }
-                    for (UnsubscribeRequest &request : requests) {
-                        if (unsubscribe != nullptr) {
-                            unsubscribe(connectionId, request.topicFilter);
+                    try {
+                        UnsubscribeHandler handle = *unsubscribe.load(std::memory_order_consume);
+                        for (UnsubscribeRequest& request : requests) {
+                            if (handle != nullptr) {
+                                handle(connectionId, request.topicFilter);
+                            }
                         }
-                    }
+                    } catch (...) { }
                     return Packet(MQTT_CONTROL_PACKET_TYPE_UNSUBACK, MQTT_REQUIRED_FLAGS_UNSUBACK, { static_cast<uint8_t>(packetIdentifier >> 8), static_cast<uint8_t>(packetIdentifier & 0xFF) });
                 }
             case MQTT_CONTROL_PACKET_TYPE_PINGREQ:
@@ -1382,9 +1520,12 @@ namespace mqtt {
                 if (!connected) {
                     throw NoPacketException();
                 }
-                if (disconnect != nullptr) {
-                    disconnect(connectionId, true);
-                }
+                try {
+                    DisconnectHandler handle = *disconnect.load(std::memory_order_consume);
+                    if (handle != nullptr) {
+                        handle(connectionId, true);
+                    }
+                } catch (...) { }
                 connected = false;
                 throw DisconnectException();
             default:
@@ -1394,13 +1535,12 @@ namespace mqtt {
 
         TCPServer tcp;
         Connections connections;
-        PublishHandler publish;
-        ConnectHandler connect;
-        DisconnectHandler disconnect;
-        SubscribeHandler subscribe;
-        UnsubscribeHandler unsubscribe;
-        PubackHandler puback, pubrec, pubrel, pubcomp;
-        std::mutex access;
+        std::atomic<PublishHandler *> publish;
+        std::atomic <ConnectHandler *> connect;
+        std::atomic <DisconnectHandler *> disconnect;
+        std::atomic <SubscribeHandler *> subscribe;
+        std::atomic <UnsubscribeHandler *> unsubscribe;
+        std::atomic <PubackHandler *> puback, pubrec, pubrel, pubcomp;
     };
 
     struct Payload {
@@ -1459,7 +1599,7 @@ namespace mqtt {
         Clients(Clients &&) = delete;
         Clients &operator=(const Clients &) = delete;
         Client Get(uint64_t connectionId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Client &client : clients) {
                 if (client.connectionId == connectionId) {
                     return client;
@@ -1481,7 +1621,7 @@ namespace mqtt {
             uint8_t willRequestedQoS = 0
 #endif
         ) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Client &client : clients) {
                 if (client.connectionId == connectionId) {
                     throw std::runtime_error("Duplicated connection identifier");
@@ -1505,7 +1645,7 @@ namespace mqtt {
             return *std::prev(clients.end());
         }
         void Delete(uint64_t connectionId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto client = clients.begin(); client != clients.end();) {
                 if (client->connectionId == connectionId) {
                     client = clients.erase(client);
@@ -1517,7 +1657,7 @@ namespace mqtt {
         }
         std::vector<std::pair<uint64_t, unsigned long long>> GetAvailablePacketsCount() {
             std::vector<std::pair<uint64_t, unsigned long long>> available;
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             available.reserve(clients.size());
             for (Client &client : clients) {
                 available.push_back({ client.connectionId, SERVICE_PUBLISHED_PAYLOADS_LIMIT - client.packetIds.size() });
@@ -1525,7 +1665,7 @@ namespace mqtt {
             return available;
         }
         std::pair<uint16_t, uint16_t> AddPacket(uint64_t connectionId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             auto getNextPacketId = [&](Client &client) -> uint16_t {
                 for (uint16_t packetId = client.packetIdSeq + 1; packetId != client.packetIdSeq; packetId++) {
                     if (!packetId) {
@@ -1555,7 +1695,7 @@ namespace mqtt {
             throw std::runtime_error("Client does not exist");
         }
         void RemovePacket(uint64_t connectionId, uint16_t packetId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Client &client : clients) {
                 if (client.connectionId == connectionId) {
                     for (auto id = client.packetIds.begin(); id != client.packetIds.end();) {
@@ -1570,12 +1710,12 @@ namespace mqtt {
             }
         }
         std::size_t Count() {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             return clients.size();
         }
     private:
         std::vector<Client> clients;
-        std::mutex access;
+        AtomicMutex access;
     };
 
     class Topics {
@@ -1608,7 +1748,7 @@ namespace mqtt {
             }
         }
         void Retain(const std::string &topicName, const std::vector<uint8_t> &payload, uint8_t requestedQoS) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             auto saveRetained = [&]() {
                 if (!filename.empty()) {
                     try {
@@ -1639,7 +1779,7 @@ namespace mqtt {
 #else
         void Subscribe(uint64_t connectionId, const std::string &topicName, uint8_t requestedQoS) {
 #endif
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Topic &topic : topics) {
                 if (topic.name == topicName) {
                     for (auto &subscription : topic.subscriptions) {
@@ -1669,7 +1809,7 @@ namespace mqtt {
 #endif
         }
         void Unsubscribe(uint64_t connectionId, const std::string &topicName) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Topic &topic : topics) {
                 if (topic.name == topicName) {
                     for (auto subscription = topic.subscriptions.begin(); subscription != topic.subscriptions.end();) {
@@ -1686,7 +1826,7 @@ namespace mqtt {
         }
         std::vector<std::string> UnsubscribeAll(uint64_t connectionId) {
             std::vector<std::string> unsubscribed;
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Topic &topic : topics) {
                 for (auto subscription = topic.subscriptions.begin(); subscription != topic.subscriptions.end();) {
                     if (subscription->connectionId == connectionId) {
@@ -1700,12 +1840,12 @@ namespace mqtt {
             return unsubscribed;
         }
         std::size_t Count() {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             return topics.size();
         }
         std::vector<std::pair<std::string, std::vector<Payload::Recipient>>> GetSubscriptions() {
             std::vector<std::pair<std::string, std::vector<Payload::Recipient>>> subscriptions;
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             subscriptions.reserve(topics.size());
             for (Topic &topic : topics) {
                 subscriptions.push_back({ topic.name, topic.subscriptions });
@@ -1713,7 +1853,7 @@ namespace mqtt {
             return subscriptions;
         }
         bool IsSubscribed(uint64_t connectionId, const std::string &topicName) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Topic &topic : topics) {
                 if (topic.name == topicName) {
                     for (auto &subscription : topic.subscriptions) {
@@ -1825,7 +1965,7 @@ namespace mqtt {
         std::string filename;
 #endif
         std::vector<Topic> topics;
-        std::mutex access;
+        AtomicMutex access;
     };
 
     class PublishedPayloads {
@@ -1835,7 +1975,7 @@ namespace mqtt {
         PublishedPayloads(PublishedPayloads &&) = delete;
         PublishedPayloads &operator=(const PublishedPayloads &) = delete;
         void Remove(uint64_t connectionId, uint16_t packetId, uint8_t requiredQoS, PublishedPayload::Status requiredStatus) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto payload = payloads.begin(); payload != payloads.end();) {
                 if ((payload->connectionId == connectionId) && (payload->packetId == packetId)) {
                     if ((payload->selectedQoS != requiredQoS) || (payload->status != requiredStatus)) {
@@ -1854,7 +1994,7 @@ namespace mqtt {
         std::vector<uint16_t> RemoveAll(uint64_t connectionId, const RepublishHandler &republish) {
 #endif
             std::vector<uint16_t> removed;
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto payload = payloads.begin(); payload != payloads.end();) {
                 if (payload->connectionId == connectionId) {
 #ifdef SERVICE_OPERATION_MODE_QUEUE
@@ -1871,7 +2011,7 @@ namespace mqtt {
             return removed;
         }
         void UpdateStatus(uint64_t connectionId, uint16_t packetId, uint8_t requiredQoS, PublishedPayload::Status requiredStatus, PublishedPayload::Status status) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto &payload : payloads) {
                 if ((payload.packetId == packetId) && (payload.connectionId == connectionId)) {
                     if ((payload.selectedQoS != requiredQoS) || (payload.status != requiredStatus)) {
@@ -1885,14 +2025,14 @@ namespace mqtt {
             throw std::runtime_error("Incorrect packet identifier");
         }
         std::size_t Count() {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             return payloads.size();
         }
         void Append(const std::vector<PublishedPayload> &payloads) {
             if (payloads.empty()) {
                 return;
             }
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             this->payloads.insert(this->payloads.end(), payloads.begin(), payloads.end());
         }
 #ifndef SERVICE_OPERATION_MODE_QUEUE
@@ -1901,7 +2041,7 @@ namespace mqtt {
         std::vector<std::pair<uint64_t, uint16_t>> Handle(Topics &topics, Server &server, const RepublishHandler &republish) {
 #endif
         std::vector<std::pair<uint64_t, uint16_t>> handled;
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto payload = payloads.begin(); payload != payloads.end();) {
                 bool success = false;
                 auto now = std::chrono::system_clock::now();
@@ -1957,7 +2097,7 @@ namespace mqtt {
         }
     private:
         std::vector<PublishedPayload> payloads;
-        std::mutex access;
+        AtomicMutex access;
     };
 
     class Packets {
@@ -1967,7 +2107,7 @@ namespace mqtt {
         Packets(Packets &&) = delete;
         Packets &operator=(const Packets &) = delete;
         void Register(uint64_t connectionId, uint16_t packetId, bool duplicate, uint16_t timeout) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (Connection &connection : connections) {
                 if (connection.connectionId == connectionId) {
                     for (auto packet = connection.packets.begin(); packet != connection.packets.end();) {
@@ -1990,7 +2130,7 @@ namespace mqtt {
             connections.push_back({ connectionId, { { packetId, timeout, std::chrono::system_clock::now() } } });
         };
         void Unregister(uint64_t connectionId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto connection = connections.begin(); connection != connections.end();) {
                 if (connection->connectionId == connectionId) {
                     connection = connections.erase(connection);
@@ -2000,7 +2140,7 @@ namespace mqtt {
             }
         };
         void Unregister(uint64_t connectionId, uint16_t packetId) {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto connection = connections.begin(); connection != connections.end();) {
                 if (connection->connectionId == connectionId) {
                     for (auto packet = connection->packets.begin(); packet != connection->packets.end();) {
@@ -2019,7 +2159,7 @@ namespace mqtt {
             throw std::runtime_error("Incorrect packet identifier");
         };
         void HandleExpired() {
-            std::lock_guard<std::mutex> lock(access);
+            std::lock_guard<AtomicMutex> lock(access);
             for (auto connection = connections.begin(); connection != connections.end();) {
                 auto now = std::chrono::system_clock::now();
                 for (auto packet = connection->packets.begin(); packet != connection->packets.end();) {
@@ -2046,7 +2186,7 @@ namespace mqtt {
             std::vector<Packet> packets;
         };
         std::vector<Connection> connections;
-        std::mutex access;
+        AtomicMutex access;
     };
 
     Service::Service(
