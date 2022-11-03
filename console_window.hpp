@@ -6,7 +6,7 @@
 #include <queue>
 #include <mutex>
 
-class ConsoleWindow : public Window
+class ConsoleWindow : protected Window
 {
 public:
     ConsoleWindow();
@@ -20,6 +20,7 @@ private:
     std::string GetText() const;
     std::vector<std::string> textLines;
     std::queue<std::string> textQueue;
+    std::atomic<HWND> hWindow;
     std::mutex access;
     AboutWindow *about;
 };

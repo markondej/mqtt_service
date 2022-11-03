@@ -21,6 +21,8 @@
 ConsoleWindow::ConsoleWindow()
     : Window("ConsoleWindow", "Console", WS_EX_APPWINDOW, WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX, MAKEINTRESOURCE(IDI_APPLICATION_ICON), CONSOLE_WINDOW_WIDTH, CONSOLE_WINDOW_HEIGHT), about(nullptr)
 {
+    hWindow.store(hWnd);
+
     ProductInfo productInfo("040904b0");
     textLines.push_back(productInfo.GetName() + ", Version " + productInfo.GetVersion());
 
@@ -84,7 +86,7 @@ void ConsoleWindow::Print(const std::string& text, bool appendTs)
         std::lock_guard<std::mutex> lock(access);
         textQueue.push(appendTs ? tsText.str() : text);
     }
-    PostMessage(hWnd, WM_NULL, 0, 0);
+    PostMessage(hWindow.load(), WM_NULL, 0, 0);
 }
 
 void ConsoleWindow::AddText(const std::string& text)

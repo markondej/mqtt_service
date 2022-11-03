@@ -56,16 +56,16 @@ namespace mqtt {
             Service *instance,
             const std::string &address,
             uint16_t port,
+            const ConnectHandler &connectHandler,
+            const DisconnectHandler &disconnectHandler,
             const ExceptionHandler &exceptionHandler,
             const MessageHandler &messageHandler
         ) noexcept;
-        ConnectHandler connectHandler;
-        DisconnectHandler disconnectHandler;
         PublishHandler publishHandler;
-        std::atomic_bool enabled;
+        std::atomic_bool enabled, disable;
         std::vector<Payload> payloads;
         std::thread thread;
-        std::mutex access;
+        mutable std::mutex access;
         void *topics;
     };
 }

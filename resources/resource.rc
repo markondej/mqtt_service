@@ -27,7 +27,7 @@ BEGIN
             VALUE "FileDescription", "Light MQTT Service"
             VALUE "FileVersion", "0.9.2.0"
             VALUE "InternalName", "mqtt_service.exe"
-            VALUE "LegalCopyright", "Copyright (c) 2021, Marcin Kondej"
+            VALUE "LegalCopyright", "Copyright (c) 2022, Marcin Kondej"
             VALUE "OriginalFilename", "mqtt_service.exe"
             VALUE "ProductName", "Light MQTT Service"
             VALUE "ProductVersion", "0.9.2.0"

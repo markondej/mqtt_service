@@ -3,7 +3,7 @@
 #include "windows/window.hpp"
 #include "windows/product_info.hpp"
 
-class AboutWindow : public Window
+class AboutWindow : protected Window
 {
 public:
     AboutWindow(HWND parent);

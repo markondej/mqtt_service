@@ -84,7 +84,7 @@ private:
 std::vector<WindowInstance> WindowInstances::instances;
 
 Window::Window(HWND parent)
-    : dpiHorizontal(WINDOW_DEFAULT_DPI), dpiVertical(WINDOW_DEFAULT_DPI), isActive(false), className(NULL), hWnd(NULL), hParent(parent)
+    : dpiHorizontal(WINDOW_DEFAULT_DPI), dpiVertical(WINDOW_DEFAULT_DPI), active(false), className(NULL), hWnd(NULL), hParent(parent)
 {
     hInstance = GetModuleHandle(NULL);
     if (hInstance == NULL) {
@@ -117,9 +117,9 @@ Window::Window(LPCSTR className, LPCSTR windowTitle, DWORD exStyle, DWORD style,
 
 Window::~Window()
 {
-    if (!isActive) {
+    if (!active) {
         Destroy();
-        isActive = false;
+        active = false;
     }
     if (className != NULL) {
         Unregister();
@@ -160,7 +160,7 @@ LRESULT CALLBACK Window::WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
     }
     if (window != nullptr) {
         if (msg == WM_DESTROY) {
-            window->isActive = false;
+            window->active = false;
         }
         if (window->hWnd == NULL) {
             window->hWnd = hWnd;
@@ -224,7 +224,7 @@ void Window::Register(LPCSTR className, LPCSTR icon, UINT style)
 
 void Window::Create(DWORD exStyle, DWORD style, LPCSTR title, unsigned width, unsigned height)
 {
-    if ((className == NULL) || isActive) {
+    if ((className == NULL) || active) {
         throw std::runtime_error("Cannot create window");
     }
 
@@ -239,7 +239,7 @@ void Window::Create(DWORD exStyle, DWORD style, LPCSTR title, unsigned width, un
          throw std::runtime_error("Cannot update window handle");
     }
 
-    isActive = true;
+    active = true;
 }
 
 void Window::Unregister()
@@ -258,7 +258,7 @@ void Window::Unregister()
 
 void Window::Destroy() const
 {
-    if (!isActive) {
+    if (!active) {
         return;
     }
     DestroyWindow(hWnd);

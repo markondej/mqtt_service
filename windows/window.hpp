@@ -23,10 +23,9 @@ protected:
     void Close(LPARAM lParam = FALSE) const;
     int GetScaled(int size, bool horizontal = true) const;
     int dpiHorizontal, dpiVertical;
-    bool isActive;
+    bool active;
     LPSTR className;
     HINSTANCE hInstance;
-    std::atomic<HWND> hWnd;
-    HWND hParent;
+    HWND hWnd, hParent;
     GUID guid;
 };

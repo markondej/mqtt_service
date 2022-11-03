@@ -58,7 +58,7 @@ AboutWindow::AboutWindow(HWND parent)
 
 AboutWindow::~AboutWindow()
 {
-    if (isActive) {
+    if (active) {
         EnableWindow(hParent, TRUE);
     }
     DeleteObject(hBackground);
