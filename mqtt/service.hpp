@@ -50,7 +50,7 @@ namespace mqtt {
             bool handle = true
         );
         bool IsEnabled() const;
-        void Disable() noexcept;
+        void Disable();
     private:
         static void ServiceThread(
             Service *instance,
