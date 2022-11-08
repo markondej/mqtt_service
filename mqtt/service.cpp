@@ -420,12 +420,12 @@ namespace mqtt {
             SetHandler(eventHandler, handler);
         }
         void Enable(const std::string &address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT) {
-            std::vector<Client *> clients;
-
             bool required = false;
             if (!enabled.compare_exchange_strong(required, true)) {
                 throw std::runtime_error("Cannot enable service (already enabled)");
             }
+
+            std::vector<Client *> clients;
 
 #ifdef _WIN32
             MQTT_SERVER_SOCKET sock = INVALID_SOCKET;
@@ -605,8 +605,7 @@ namespace mqtt {
                 Disable();
             }
             void Disable() {
-                disable.store(true);
-                if (thread.joinable()) {
+                if (!disable.exchange(true) && thread.joinable()) {
                     thread.join();
                 }
             }
@@ -624,19 +623,17 @@ namespace mqtt {
                 try {
                     bool delay = false;
                     input.data = new uint8_t[MQTT_SERVER_RECV_BUFFER_LENGTH];
-                    while ((event.type == Event::Type::Connected) || !instance->disable.load()) {
+                    while (!instance->disable.load()) {
                         if (output.data != nullptr) {
                             int bytes = send(sock, reinterpret_cast<char *>(output.data), output.length, 0);
                             delete[] output.data; output.data = nullptr; output.length = 0;
                             if (bytes == MQTT_SERVER_SOCKET_ERROR) {
-                                instance->disable.store(true);
                                 break;
                             }
                         } else if (delay && !output.disconnect) {
                             std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_CLIENT_NOP_DELAY));
                         }
                         if (output.disconnect) {
-                            instance->disable.store(true);
                             break;
                         }
                         int bytes = recv(sock, reinterpret_cast<char *>(input.data), MQTT_SERVER_RECV_BUFFER_LENGTH, 0);
@@ -645,10 +642,7 @@ namespace mqtt {
 #else
                         if ((bytes == 0) || ((bytes == MQTT_SERVER_SOCKET_ERROR) && ((errno != EWOULDBLOCK) && (errno != EAGAIN)))) {
 #endif
-                            instance->disable.store(true);
-                            if (event.type != Event::Type::Connected) {
-                                break;
-                            }
+                            break;
                         }
                         input.length = (bytes != MQTT_SERVER_SOCKET_ERROR) ? bytes : 0;
                         delay = !input.length;
@@ -660,7 +654,6 @@ namespace mqtt {
                             }
                             input.length = 0;
                         } catch (...) {
-                            instance->disable.store(true);
                             break;
                         }
                         event.type = Event::Type::None;
@@ -677,17 +670,19 @@ namespace mqtt {
                     sock = MQTT_SERVER_SOCKET_ERROR;
 #endif
 
-                    event.type = Event::Type::Disconnected;
                     if (output.data != nullptr) {
                         delete[] output.data; output.data = nullptr; output.length = 0;
                     }
-                    try {
-                        output.disconnect = true;
-                        EventHandler *handle = eventHandler->load(std::memory_order_consume);
-                        if (handle != nullptr) {
-                            (*handle)(event, input, output);
-                        }
-                    } catch (...) { }
+                    if (event.type != Event::Type::Connected) {
+                        event.type = Event::Type::Disconnected;
+                        try {
+                            output.disconnect = true;
+                            EventHandler *handle = eventHandler->load(std::memory_order_consume);
+                            if (handle != nullptr) {
+                                (*handle)(event, input, output);
+                            }
+                        } catch (...) { }
+                    }
                 } catch (...) {
 #ifdef _WIN32
                     if (sock != INVALID_SOCKET) {
@@ -2274,10 +2269,9 @@ namespace mqtt {
         return enabled.load();
     }
 
-    void Service::Disable() noexcept
+    void Service::Disable()
     {
-        disable.store(true);
-        if (thread.joinable()) {
+        if (!disable.exchange(true) && thread.joinable()) {
             thread.join();
         }
     }
@@ -2348,6 +2342,7 @@ namespace mqtt {
             }
         };
 
+        std::atomic_bool error(false);
         std::thread serverThread([&]() {
             printMessage("Starting service on: " + address + ":" + std::to_string(port));
 
@@ -2526,11 +2521,11 @@ namespace mqtt {
                 server.Enable(address, port);
             } catch (std::exception &exception) {
                 handleException(exception);
-                instance->disable.store(true);
+                error.store(true);
             }
         });
 
-        while (!instance->disable.load() && !server.IsEnabled()) {
+        while (!instance->disable.load() && !server.IsEnabled() && !error.load()) {
             std::this_thread::sleep_for(std::chrono::microseconds(SERVICE_NOP_DELAY));
         }
 
@@ -2610,7 +2605,7 @@ namespace mqtt {
         try {
             auto statusTimestamp = std::chrono::system_clock::now();
             std::size_t publishedCount = 0;
-            while (!instance->disable.load()) {
+            while (!instance->disable.load() && !error.load()) {
                 bool processing = false;
                 auto payloads = getPublished();
                 publishedCount += payloads.size();

@@ -146,7 +146,6 @@ WPARAM Window::HandleMessages(mqtt::Service &service)
             std::this_thread::sleep_for(std::chrono::microseconds(WINDOW_NOP_INTERVAL));
         }
     }
-    service.Disable();
     return msg.wParam;
 }
 
