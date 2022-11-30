@@ -40,7 +40,7 @@ using std::min;
 
 #define SERVICE_FILE_BUFFER_LENGTH 1024
 #define SERVICE_STATUS_INTERVAL 30
-#define SERVICE_NOP_DELAY 1000
+#define SERVICE_NOP_DELAY 1
 
 #ifndef MQTT_SERVER_CONNECTIONS_LIMIT
 #define MQTT_SERVER_CONNECTIONS_LIMIT USHRT_MAX
@@ -50,8 +50,8 @@ using std::min;
 #define MQTT_SERVER_RECV_BUFFER_LENGTH 1024
 #endif
 
-#define MQTT_SERVER_SERVER_NOP_DELAY 1000
-#define MQTT_SERVER_CLIENT_NOP_DELAY 1000
+#define MQTT_SERVER_SERVER_NOP_DELAY 1
+#define MQTT_SERVER_CLIENT_NOP_DELAY 1
 
 #ifdef _WIN32
 #define MQTT_SERVER_SOCKET SOCKET
@@ -409,7 +409,7 @@ namespace mqtt {
         virtual ~TCPServer() {
             Disable();
             while (enabled.load()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_SERVER_NOP_DELAY));
+                std::this_thread::sleep_for(std::chrono::milliseconds(MQTT_SERVER_SERVER_NOP_DELAY));
             }
             FreeHandler(eventHandler);
         }
@@ -523,7 +523,7 @@ namespace mqtt {
                         ((conn = accept(sock, client.GetSockAddr(), &length)) == MQTT_SERVER_SOCKET_ERROR)
 #endif
                         ) {
-                        std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_SERVER_NOP_DELAY));
+                        std::this_thread::sleep_for(std::chrono::milliseconds(MQTT_SERVER_SERVER_NOP_DELAY));
                         continue;
                     }
                     if (!setNonBlock(conn)) {
@@ -547,7 +547,7 @@ namespace mqtt {
                 }
 
                 while (updateClients()) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_SERVER_NOP_DELAY));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(MQTT_SERVER_SERVER_NOP_DELAY));
                 }
 
                 MQTT_SERVER_CLOSESOCKET(sock);
@@ -631,7 +631,7 @@ namespace mqtt {
                                 break;
                             }
                         } else if (delay && !output.disconnect) {
-                            std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_CLIENT_NOP_DELAY));
+                            std::this_thread::sleep_for(std::chrono::milliseconds(MQTT_SERVER_CLIENT_NOP_DELAY));
                         }
                         if (output.disconnect) {
                             break;
@@ -1062,7 +1062,7 @@ namespace mqtt {
         virtual ~Server() {
             Disable();
             while (IsEnabled()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(MQTT_SERVER_SERVER_NOP_DELAY));
+                std::this_thread::sleep_for(std::chrono::milliseconds(MQTT_SERVER_SERVER_NOP_DELAY));
             }
             FreeHandler(publish);
             FreeHandler(connect);
@@ -2626,7 +2626,7 @@ namespace mqtt {
                 }
                 receivedQoS2.HandleExpired();
                 if (payloads.empty() && !processing) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(SERVICE_NOP_DELAY));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(SERVICE_NOP_DELAY));
                 }
             }
         } catch (std::exception &exception) {

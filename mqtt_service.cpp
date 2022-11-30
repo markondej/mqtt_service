@@ -9,7 +9,7 @@ using Console = ConsoleWindow;
 #include <cstring>
 
 #ifndef _WIN32
-#define CONSOLE_NOP_DELAY 500000
+#define CONSOLE_NOP_DELAY 500
 #endif
 
 mqtt::Service *service = nullptr;
@@ -89,7 +89,7 @@ int main(int argc, char** argv)
             });
 #ifndef _WIN32
         while (service->IsEnabled()) {
-            std::this_thread::sleep_for(std::chrono::microseconds(CONSOLE_NOP_DELAY));
+            std::this_thread::sleep_for(std::chrono::milliseconds(CONSOLE_NOP_DELAY));
         }
 #else
         result = Window::HandleMessages(*service);
