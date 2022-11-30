@@ -2525,10 +2525,6 @@ namespace mqtt {
             }
         });
 
-        while (!instance->disable.load() && !server.IsEnabled() && !error.load()) {
-            std::this_thread::sleep_for(std::chrono::microseconds(SERVICE_NOP_DELAY));
-        }
-
         auto getPublished = [&]() -> std::vector<PublishedPayload> {
             std::vector<PublishedPayload> payloads;
             auto available = clients.GetAvailablePacketsCount();
