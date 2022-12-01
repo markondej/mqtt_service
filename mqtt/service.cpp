@@ -952,7 +952,7 @@ namespace mqtt {
         std::vector<Connection> connections;
     };
 
-    class Server : private TCPServer {
+    class Server : public TCPServer {
     public:
         struct PublishFlags {
             bool dup, qos1, qos2, retain;
@@ -991,7 +991,7 @@ namespace mqtt {
         using SubscribeHandler = std::function<SubscribeResponse(uint64_t connectionId, const std::string &topicFilter, uint8_t requestedQoS)>;
         using UnsubscribeHandler = std::function<void(uint64_t connectionId, const std::string &topicFilter)>;
         Server() : publish(nullptr), connect(nullptr), disconnect(nullptr), subscribe(nullptr), unsubscribe(nullptr), puback(nullptr), pubrec(nullptr), pubrel(nullptr), pubcomp(nullptr) {
-            SetEventHandler([&](const TCPServer::Event &event, const TCPServer::InputStream &input, TCPServer::OutputStream &output) {
+            TCPServer::SetEventHandler([&](const TCPServer::Event &event, const TCPServer::InputStream &input, TCPServer::OutputStream &output) {
                 bool connected = false, handled = false;
                 auto connection = (event.type == TCPServer::Event::Type::Connected) ? connections.Add(event.connectionId, *event.address, connected) : connections.ClearBuffers(event.connectionId);
                 if (connected) {
@@ -1068,15 +1068,7 @@ namespace mqtt {
             FreeHandler(pubrel);
             FreeHandler(pubcomp);
         }
-        void Enable(const std::string &address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT) {
-            TCPServer::Enable(address, port, connections);
-        }
-        void Disable() {
-            TCPServer::Disable();
-        }
-        bool IsEnabled() const {
-            return TCPServer::IsEnabled();
-        }
+        void SetEventHandler(const EventHandler &handler) = delete;
         void SetConnectHandler(const ConnectHandler &handler) {
             SetHandler(connect, handler);
         }
