@@ -415,8 +415,7 @@ namespace mqtt {
             SetHandler(eventHandler, handler);
         }
         void Enable(const std::string &address, uint16_t port, uint32_t connections = MQTT_SERVER_CONNECTIONS_LIMIT) {
-            bool required = false;
-            if (!enabled.compare_exchange_strong(required, true)) {
+            if (enabled.exchange(true)) {
                 throw std::runtime_error("Cannot enable service (already enabled)");
             }
 
