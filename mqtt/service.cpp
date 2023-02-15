@@ -596,12 +596,18 @@ namespace mqtt {
             Client(Client &&) = delete;
             Client &operator=(const Client &) = delete;
             virtual ~Client() {
-                Disable();
+                if (!Disable()) {
+                    while (enabled.load()) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(MQTT_SERVER_CLIENT_NOP_DELAY));
+                    }
+                }
             }
-            void Disable() {
+            bool Disable() {
                 if (!disable.exchange(true) && thread.joinable()) {
                     thread.join();
+                    return true;
                 }
+                return false;
             }
             bool IsEnabled() const {
                 return enabled.load();
@@ -2207,7 +2213,11 @@ namespace mqtt {
 
     Service::~Service()
     {
-        Disable();
+        if (!Disable()) {
+            while (enabled.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(SERVICE_NOP_DELAY));
+            }
+        }
         delete reinterpret_cast<Topics *>(topics);
     }
 
@@ -2255,11 +2265,13 @@ namespace mqtt {
         return enabled.load();
     }
 
-    void Service::Disable()
+    bool Service::Disable()
     {
         if (!disable.exchange(true) && thread.joinable()) {
             thread.join();
+            return false;
         }
+        return true;
     }
 
     void Service::ServiceThread(
