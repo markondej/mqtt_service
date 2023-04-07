@@ -1,6 +1,7 @@
 #include "about_window.hpp"
 #include "resources/resource.h"
 #include <cstring>
+#include <stdexcept>
 
 #define ABOUT_NOP_INTERVAL 1000
 
