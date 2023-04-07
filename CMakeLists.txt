@@ -36,5 +36,5 @@ else()
 	)
 
 	target_link_libraries(${EXECUTABLE} pthread atomic)
-	add_definitions(-DPRODUCT_NAME="${CMAKE_PROJECT_DESCRIPTION}" -DPRODUCT_VERSION="${CMAKE_PROJECT_VERSION})"
+	add_definitions(-DPRODUCT_NAME="${CMAKE_PROJECT_DESCRIPTION}" -DPRODUCT_VERSION="${CMAKE_PROJECT_VERSION}")
 endif()
