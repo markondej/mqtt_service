@@ -492,10 +492,24 @@ namespace mqtt {
                     throw std::runtime_error("Cannot generate connection identifier");
                 };
 
+                fd_set fdSet;
+                FD_ZERO(&fdSet);
+                FD_SET(sock, &fdSet);
+
+                MQTT_SERVER_SOCKET maxFd = sock;
+
                 auto updateClients = [&]() {
                     unsigned enabled = 0;
                     for (auto client = clients.begin(); client != clients.end();) {
                         if (!(*client)->IsEnabled()) {
+                            FD_CLR((*client)->GetFd(), &fdSet);
+                            maxFd = sock;
+                            for (u_int i = 0; i < fdSet.fd_count; i++) {
+                                MQTT_SERVER_SOCKET fd = fdSet.fd_array[i];
+                                if (fd > maxFd) {
+                                    maxFd = fd;
+                                }
+                            }
                             delete *client;
                             client = clients.erase(client);
                         } else {
@@ -509,6 +523,10 @@ namespace mqtt {
                 auto registerClient = [&](MQTT_SERVER_SOCKET fd, const IPAddress& address) {
                     try {
                         clients.push_back(new Client(this, fd, address, getNextId()));
+                        FD_SET(fd, &fdSet);
+                        if (fd > maxFd) {
+                            maxFd = fd;
+                        }
                     } catch (...) {
 #ifdef _WIN32
                         shutdown(fd, SD_BOTH);
@@ -521,9 +539,7 @@ namespace mqtt {
 
                 while (!disable.load()) {
                     IPAddress client(server);
-                    fd_set readSet;
-                    FD_ZERO(&readSet);
-                    FD_SET(sock, &readSet);
+                    fd_set readSet = fdSet;
 
                     timeval timeout;
                     timeout.tv_sec = MQTT_SERVER_SELECT_TIMEOUT / 1000;
@@ -538,21 +554,33 @@ namespace mqtt {
                         continue;
                     }
 
-                    if (FD_ISSET(sock, &readSet)) {
-                        MQTT_SERVER_SOCKLEN length = client.GetSockAddrLength();
-                        MQTT_SERVER_SOCKET remote = accept(sock, client.GetSockAddr(), &length);
+                    for (u_int i = 0; i < fdSet.fd_count; i++) {
+                        MQTT_SERVER_SOCKET fd = fdSet.fd_array[i];
+                        if (FD_ISSET(fd, &readSet)) {
+                            if (fd == sock) {
+                                MQTT_SERVER_SOCKLEN length = client.GetSockAddrLength();
+                                MQTT_SERVER_SOCKET remote = accept(sock, client.GetSockAddr(), &length);
 #ifdef _WIN32
-                        if (remote == INVALID_SOCKET) {
+                                if (remote == INVALID_SOCKET) {
 #else
-                        if (remote == MQTT_SERVER_SOCKET_ERROR) {
+                                if (remote == MQTT_SERVER_SOCKET_ERROR) {
 #endif
-                            continue;
+                                    continue;
+                                }
+                                if (!setNonBlock(remote)) {
+                                    MQTT_SERVER_CLOSESOCKET(remote);
+                                    continue;
+                                }
+                                registerClient(remote, client);
+                            } else {
+                                for (Client* client : clients) {
+                                    if (fd == client->GetFd()) {
+                                        client->SetDataReady();
+                                        break;
+                                    }
+                                }
+                            }
                         }
-                        if (!setNonBlock(remote)) {
-                            MQTT_SERVER_CLOSESOCKET(remote);
-                            continue;
-                        }
-                        registerClient(remote, client);
                     }
                 }
 
@@ -609,7 +637,7 @@ namespace mqtt {
     private:
         class Client {
         public:
-            Client(TCPServer *owner, MQTT_SERVER_SOCKET fd, const IPAddress &address, uint64_t connectionId) : enabled(true), disable(false), connectionId(connectionId), fd(fd), owner(owner) {
+            Client(TCPServer *owner, MQTT_SERVER_SOCKET fd, const IPAddress &address, uint64_t connectionId) : enabled(true), disable(false), connectionId(connectionId), fd(fd), owner(owner), ready(false) {
                 thread = std::thread(ClientThread, this, address);
             }
             Client(const Client &) = delete;
@@ -631,6 +659,13 @@ namespace mqtt {
             }
             MQTT_SERVER_SOCKET GetFd() const {
                 return fd.load();
+            }
+            void SetDataReady() {
+                {
+                    std::lock_guard<std::mutex> lock(access);
+                    ready = true;
+                }
+                ctrl.notify_all();
             }
         private:
             static void ClientThread(Client *instance, const IPAddress &address) noexcept {
@@ -654,6 +689,8 @@ namespace mqtt {
                         if (output.disconnect) {
                             break;
                         }
+                        std::unique_lock<std::mutex> lock(instance->access);
+                        instance->ctrl.wait(lock);
                         int bytes = recv(fd, reinterpret_cast<char *>(input.data), MQTT_SERVER_RECV_BUFFER_LENGTH, 0);
 #ifdef _WIN32
                         if ((bytes == 0) || ((bytes == MQTT_SERVER_SOCKET_ERROR) && (WSAGetLastError() != WSAEWOULDBLOCK))) {
@@ -723,6 +760,9 @@ namespace mqtt {
             std::atomic_uint64_t connectionId;
             std::atomic<MQTT_SERVER_SOCKET> fd;
             TCPServer* owner;
+            std::mutex access;
+            std::condition_variable ctrl;
+            bool ready;
         };
         std::atomic_bool enabled, disable;
         std::atomic<EventHandler*> eventHandler;
