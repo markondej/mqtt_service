@@ -1,4 +1,5 @@
 #include "service.hpp"
+#include <condition_variable>
 #include <fstream>
 #include <cassert>
 #include <chrono>
@@ -500,21 +501,25 @@ namespace mqtt {
 
                 auto updateClients = [&]() {
                     unsigned enabled = 0;
+                    bool updateMaxFd = false;
                     for (auto client = clients.begin(); client != clients.end();) {
                         if (!(*client)->IsEnabled()) {
                             FD_CLR((*client)->GetFd(), &fdSet);
-                            maxFd = sock;
-                            for (u_int i = 0; i < fdSet.fd_count; i++) {
-                                MQTT_SERVER_SOCKET fd = fdSet.fd_array[i];
-                                if (fd > maxFd) {
-                                    maxFd = fd;
-                                }
-                            }
                             delete *client;
                             client = clients.erase(client);
+                            updateMaxFd = true;
                         } else {
                             enabled++;
                             client++;
+                        }
+                    }
+                    if (updateMaxFd) {
+                        maxFd = sock;
+                        for (const Client *client : clients) {
+                            MQTT_SERVER_SOCKET fd = client->GetFd();
+                            if (fd > maxFd) {
+                                maxFd = fd;
+                            }
                         }
                     }
                     return enabled;
@@ -545,7 +550,7 @@ namespace mqtt {
                     timeout.tv_sec = MQTT_SERVER_SELECT_TIMEOUT / 1000;
                     timeout.tv_usec = (MQTT_SERVER_SELECT_TIMEOUT % 1000) * 1000;
 
-                    int activity = select(static_cast<int>(sock) + 1, &readSet, NULL, NULL, &timeout);
+                    int activity = select(static_cast<int>(maxFd) + 1, &readSet, NULL, NULL, &timeout);
                     if (activity == MQTT_SERVER_SOCKET_ERROR) {
                         throw std::runtime_error("Socket error occured (select)");
                     }
@@ -554,32 +559,25 @@ namespace mqtt {
                         continue;
                     }
 
-                    for (u_int i = 0; i < fdSet.fd_count; i++) {
-                        MQTT_SERVER_SOCKET fd = fdSet.fd_array[i];
-                        if (FD_ISSET(fd, &readSet)) {
-                            if (fd == sock) {
-                                MQTT_SERVER_SOCKLEN length = client.GetSockAddrLength();
-                                MQTT_SERVER_SOCKET remote = accept(sock, client.GetSockAddr(), &length);
+                    if (FD_ISSET(sock, &readSet)) {
+                        MQTT_SERVER_SOCKLEN length = client.GetSockAddrLength();
+                        MQTT_SERVER_SOCKET remote = accept(sock, client.GetSockAddr(), &length);
 #ifdef _WIN32
-                                if (remote == INVALID_SOCKET) {
+                        if (remote != INVALID_SOCKET) {
 #else
-                                if (remote == MQTT_SERVER_SOCKET_ERROR) {
+                        if (remote != MQTT_SERVER_SOCKET_ERROR) {
 #endif
-                                    continue;
-                                }
-                                if (!setNonBlock(remote)) {
-                                    MQTT_SERVER_CLOSESOCKET(remote);
-                                    continue;
-                                }
+                            if (setNonBlock(remote)) {
                                 registerClient(remote, client);
                             } else {
-                                for (Client* client : clients) {
-                                    if (fd == client->GetFd()) {
-                                        client->SetDataReady();
-                                        break;
-                                    }
-                                }
+                                MQTT_SERVER_CLOSESOCKET(remote);
                             }
+                        }
+                    }
+
+                    for (Client *client : clients) {
+                        if (FD_ISSET(client->GetFd(), &readSet)) {
+                            client->SetDataReady();
                         }
                     }
                 }
