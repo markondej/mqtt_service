@@ -55,7 +55,7 @@ int main(int argc, char** argv)
 
 #ifndef _WIN32
     std::signal(SIGINT, signalHandler);
-    std::signal(SIGTSTP, signalHandler);
+    std::signal(SIGTERM, signalHandler);
 
     int result = EXIT_SUCCESS;
 #else
