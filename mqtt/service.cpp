@@ -499,7 +499,7 @@ namespace mqtt {
 
                 MQTT_SERVER_SOCKET maxFd = sock;
 
-                auto updateClients = [&]() {
+                auto updateClients = [&]() -> unsigned {
                     unsigned enabled = 0;
                     bool updateMaxFd = false;
                     for (auto client = clients.begin(); client != clients.end();) {
