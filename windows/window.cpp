@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <thread>
 
 #define WINDOW_NOP_INTERVAL 1000
 
@@ -126,7 +127,7 @@ Window::~Window()
     }
 }
 
-WPARAM Window::HandleMessages(mqtt::Service &service)
+WPARAM Window::HandleMessages(const StatusHandler &status)
 {
     MSG msg;
     while (true) {
@@ -138,7 +139,7 @@ WPARAM Window::HandleMessages(mqtt::Service &service)
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
             }
-        } else if (!service.IsEnabled()) {
+        } else if ((status != nullptr) && !status()) {
             for (auto &instance : WindowInstances::GetAll()) {
                 instance.window->Close(TRUE);
             }

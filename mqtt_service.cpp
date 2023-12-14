@@ -92,7 +92,7 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::milliseconds(CONSOLE_NOP_DELAY));
         }
 #else
-        result = Window::HandleMessages(*service);
+        result = Window::HandleMessages([&]() -> bool { return service->IsEnabled(); });
 #endif
     } catch (...) {
 #ifndef _WIN32

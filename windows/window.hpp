@@ -1,18 +1,19 @@
 #pragma once
 
-#include "../mqtt/service.hpp"
+#include <functional>
 #include <windows.h>
 
 class Window
 {
 public:
+    using StatusHandler = std::function<bool()>;
     explicit Window(HWND parent = NULL);
     Window(LPCSTR className, LPCSTR windowTitle, DWORD exStyle, DWORD style, LPCSTR icon, unsigned width, unsigned height, HWND parent = NULL);
     Window(const Window&) = delete;
     Window(Window&&) = delete;
     Window& operator=(const Window&) = delete;
     virtual ~Window();
-    static WPARAM HandleMessages(mqtt::Service &service);
+    static WPARAM HandleMessages(const StatusHandler &status);
 protected:
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept;
     virtual LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noexcept;
