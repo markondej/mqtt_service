@@ -491,33 +491,15 @@ namespace mqtt {
                     throw std::runtime_error("Cannot generate connection identifier");
                 };
 
-                fd_set fdSet;
-                FD_ZERO(&fdSet);
-                FD_SET(sock, &fdSet);
-
-                MQTT_SERVER_SOCKET maxFd = sock;
-
                 auto updateClients = [&]() -> unsigned {
                     unsigned enabled = 0;
-                    bool updateMaxFd = false;
                     for (auto client = clients.begin(); client != clients.end();) {
                         if (!(*client)->IsEnabled()) {
-                            FD_CLR((*client)->GetFd(), &fdSet);
                             delete *client;
                             client = clients.erase(client);
-                            updateMaxFd = true;
                         } else {
                             enabled++;
                             client++;
-                        }
-                    }
-                    if (updateMaxFd) {
-                        maxFd = sock;
-                        for (const Client *client : clients) {
-                            MQTT_SERVER_SOCKET fd = client->GetFd();
-                            if (fd > maxFd) {
-                                maxFd = fd;
-                            }
                         }
                     }
                     return enabled;
@@ -526,10 +508,6 @@ namespace mqtt {
                 auto registerClient = [&](MQTT_SERVER_SOCKET fd, const IPAddress& address) {
                     try {
                         clients.push_back(new Client(this, fd, address, getNextId()));
-                        FD_SET(fd, &fdSet);
-                        if (fd > maxFd) {
-                            maxFd = fd;
-                        }
                     } catch (...) {
 #ifdef _WIN32
                         shutdown(fd, SD_BOTH);
@@ -542,13 +520,14 @@ namespace mqtt {
 
                 while (!disable.load()) {
                     IPAddress client(server);
-                    fd_set readSet = fdSet;
+                    fd_set fdSet;
+                    FD_SET(sock, &fdSet);
 
                     timeval timeout;
                     timeout.tv_sec = MQTT_SERVER_SELECT_TIMEOUT / 1000;
                     timeout.tv_usec = (MQTT_SERVER_SELECT_TIMEOUT % 1000) * 1000;
 
-                    int activity = select(static_cast<int>(maxFd) + 1, &readSet, NULL, NULL, &timeout);
+                    int activity = select(sock + 1, &fdSet, NULL, NULL, &timeout);
                     if (activity == MQTT_SERVER_SOCKET_ERROR) {
                         throw std::runtime_error("Socket error occured (select)");
                     }
@@ -557,7 +536,7 @@ namespace mqtt {
                         continue;
                     }
 
-                    if (FD_ISSET(sock, &readSet)) {
+                    if (FD_ISSET(sock, &fdSet)) {
                         MQTT_SERVER_SOCKLEN length = client.GetSockAddrLength();
                         MQTT_SERVER_SOCKET remote = accept(sock, client.GetSockAddr(), &length);
 #ifdef _WIN32
@@ -570,12 +549,6 @@ namespace mqtt {
                             } else {
                                 MQTT_SERVER_CLOSESOCKET(remote);
                             }
-                        }
-                    }
-
-                    for (Client *client : clients) {
-                        if (FD_ISSET(client->GetFd(), &readSet)) {
-                            client->SetDataReady();
                         }
                     }
                 }
@@ -615,7 +588,7 @@ namespace mqtt {
     protected:
         template <typename T>
         void SetHandler(std::atomic<T *> &inner, const T &handler) {
-            if (handler == nullptr) {
+            if (!handler) {
                 return;
             }
             T *required = nullptr, *desired = new T(handler);
@@ -626,14 +599,14 @@ namespace mqtt {
         template <typename T>
         void FreeHandler(std::atomic<T *> &inner) {
             T *handler = inner.exchange(nullptr);
-            if (handler != nullptr) {
+            if (handler) {
                 delete handler;
             }
         }
     private:
         class Client {
         public:
-            Client(TCPServer *owner, MQTT_SERVER_SOCKET fd, const IPAddress &address, uint64_t connectionId) : enabled(true), disable(false), connectionId(connectionId), fd(fd), owner(owner), ready(false) {
+            Client(TCPServer *owner, MQTT_SERVER_SOCKET fd, const IPAddress &address, uint64_t connectionId) : enabled(true), disable(false), connectionId(connectionId), fd(fd), owner(owner) {
                 thread = std::thread(ClientThread, this, address);
             }
             Client(const Client &) = delete;
@@ -662,13 +635,6 @@ namespace mqtt {
             MQTT_SERVER_SOCKET GetFd() const {
                 return fd.load();
             }
-            void SetDataReady() {
-                {
-                    std::lock_guard<std::mutex> lock(access);
-                    ready = true;
-                }
-                ctrl.notify_all();
-            }
         private:
             static void ClientThread(Client *instance, const IPAddress &address) noexcept {
                 Event event = { instance->connectionId, &address, Event::Type::Connected };
@@ -679,7 +645,7 @@ namespace mqtt {
                     bool delay = false;
                     input.data = new uint8_t[MQTT_SERVER_RECV_BUFFER_LENGTH];
                     while (!instance->disable.load()) {
-                        if (output.data != nullptr) {
+                        if (output.data) {
                             int bytes = send(fd, reinterpret_cast<char *>(output.data), output.length, 0);
                             delete[] output.data; output.data = nullptr; output.length = 0;
                             if (bytes == MQTT_SERVER_SOCKET_ERROR) {
@@ -691,8 +657,6 @@ namespace mqtt {
                         if (output.disconnect) {
                             break;
                         }
-                        std::unique_lock<std::mutex> lock(instance->access);
-                        instance->ctrl.wait(lock);
                         int bytes = recv(fd, reinterpret_cast<char *>(input.data), MQTT_SERVER_RECV_BUFFER_LENGTH, 0);
 #ifdef _WIN32
                         if ((bytes == 0) || ((bytes == MQTT_SERVER_SOCKET_ERROR) && (WSAGetLastError() != WSAEWOULDBLOCK))) {
@@ -706,7 +670,7 @@ namespace mqtt {
                         try {
                             output.disconnect = false;
                             EventHandler *handle = instance->owner->eventHandler.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 (*handle)(event, input, output);
                             }
                             input.length = 0;
@@ -727,7 +691,7 @@ namespace mqtt {
                     fd = MQTT_SERVER_SOCKET_ERROR;
 #endif
 
-                    if (output.data != nullptr) {
+                    if (output.data) {
                         delete[] output.data; output.data = nullptr; output.length = 0;
                     }
                     if (event.type != Event::Type::Connected) {
@@ -735,7 +699,7 @@ namespace mqtt {
                         try {
                             output.disconnect = true;
                             EventHandler *handle = instance->owner->eventHandler.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 (*handle)(event, input, output);
                             }
                         } catch (...) { }
@@ -749,10 +713,10 @@ namespace mqtt {
                         MQTT_SERVER_CLOSESOCKET(fd);
                     }
                 }
-                if (input.data != nullptr) {
+                if (input.data) {
                     delete[] input.data;
                 }
-                if (output.data != nullptr) {
+                if (output.data) {
                     delete[] output.data;
                 }
                 instance->enabled.store(false);
@@ -762,9 +726,6 @@ namespace mqtt {
             std::atomic_uint64_t connectionId;
             std::atomic<MQTT_SERVER_SOCKET> fd;
             TCPServer* owner;
-            std::mutex access;
-            std::condition_variable ctrl;
-            bool ready;
         };
         std::atomic_bool enabled, disable;
         std::atomic<EventHandler*> eventHandler;
@@ -1064,7 +1025,7 @@ namespace mqtt {
                 if (connected) {
                     try {
                         DisconnectHandler *handle = disconnect.load(std::memory_order_consume);
-                        if (handle != nullptr) {
+                        if (handle) {
                             (*handle)(event.connectionId, false);
                         }
                     } catch (...) { }
@@ -1113,7 +1074,7 @@ namespace mqtt {
                     if (deleted.connected) {
                         try {
                             DisconnectHandler *handle = disconnect.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 (*handle)(event.connectionId, false);
                             }
                         } catch (...) { }
@@ -1293,7 +1254,7 @@ namespace mqtt {
                     } else {
                         try {
                             ConnectHandler *handle = connect.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 ConnectFlags flags = {
                                     static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_USER_NAME),
                                     static_cast<bool>(connectFlags & MQTT_CONNECT_FLAG_PASSWORD),
@@ -1349,7 +1310,7 @@ namespace mqtt {
                         try {
                             PublishResponse response = PublishResponse::QoS0;
                             PublishHandler *handle = publish.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 response = (*handle)(connectionId, packetIdentifier, topicName, payload, flags);
                             }
                             switch (response) {
@@ -1379,7 +1340,7 @@ namespace mqtt {
                     if (connected) {
                         try {
                             PubackHandler *handle = puback.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 (*handle)(connectionId, packetIdentifier);
                             }
                         } catch (...) {
@@ -1401,7 +1362,7 @@ namespace mqtt {
                     if (connected) {
                         try {
                             PubackHandler *handle = pubrel.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 (*handle)(connectionId, packetIdentifier);
                             }
                         } catch (...) {
@@ -1423,7 +1384,7 @@ namespace mqtt {
                     if (connected) {
                         try {
                             PubackHandler *handle = pubrec.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 (*handle)(connectionId, packetIdentifier);
                             }
                         } catch (...) {
@@ -1445,7 +1406,7 @@ namespace mqtt {
                     if (connected) {
                         try {
                             PubackHandler *handle = pubcomp.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 (*handle)(connectionId, packetIdentifier);
                             }
                         } catch (...) {
@@ -1496,7 +1457,7 @@ namespace mqtt {
                     for (SubscribeRequest &request : requests) {
                         try {
                             SubscribeHandler *handle = subscribe.load(std::memory_order_consume);
-                            if (handle != nullptr) {
+                            if (handle) {
                                 result.push_back(GetSubscribeReturnCode((*handle)(connectionId, request.topicFilter, request.requestedQoS)));
                                 continue;
                             }
@@ -1540,7 +1501,7 @@ namespace mqtt {
                     try {
                         UnsubscribeHandler *handle = unsubscribe.load(std::memory_order_consume);
                         for (UnsubscribeRequest& request : requests) {
-                            if (handle != nullptr) {
+                            if (handle) {
                                 (*handle)(connectionId, request.topicFilter);
                             }
                         }
@@ -1570,7 +1531,7 @@ namespace mqtt {
                 }
                 try {
                     DisconnectHandler *handle = disconnect.load(std::memory_order_consume);
-                    if (handle != nullptr) {
+                    if (handle) {
                         (*handle)(connectionId, true);
                     }
                 } catch (...) { }
@@ -2254,17 +2215,17 @@ namespace mqtt {
 #ifndef SERVICE_OPERATION_MODE_QUEUE
         if (!filename.empty()) {
             try {
-                if (messageHandler != nullptr) {
+                if (messageHandler) {
                     messageHandler("Loading saved topics from " + filename);
                 }
                 topics = reinterpret_cast<void *>(new Topics(filename));
             } catch (...) {
-                if (messageHandler != nullptr) {
+                if (messageHandler) {
                     messageHandler("Failed to load topics");
                 }
             }
         }
-        if (topics == nullptr) {
+        if (!topics) {
 #else
         {
 #endif
@@ -2298,7 +2259,7 @@ namespace mqtt {
         }
         {
             std::lock_guard<std::mutex> lock(access);
-            if ((payloads.size() < SERVICE_RECEIVED_PAYLOADS_LIMIT) && (!handle || (publishHandler == nullptr) || publishHandler(clientId, topicName, payload))) {
+            if ((payloads.size() < SERVICE_RECEIVED_PAYLOADS_LIMIT) && (!handle || !publishHandler || publishHandler(clientId, topicName, payload))) {
                 payloads.push_back({
                     topicName,
                     payload,
@@ -2353,12 +2314,12 @@ namespace mqtt {
         Topics *topics = reinterpret_cast<Topics *>(instance->topics);
 
         auto handleException = [&](const std::exception &exception) {
-            if (exceptionHandler != nullptr) {
+            if (exceptionHandler) {
                 exceptionHandler(exception);
             }
         };
         auto printMessage = [&](const std::string &message) {
-            if (messageHandler != nullptr) {
+            if (messageHandler) {
                 messageHandler(message);
             }
         };
@@ -2413,7 +2374,7 @@ namespace mqtt {
                 }
                 {
                     std::lock_guard<std::mutex> lock(instance->access);
-                    if ((connectHandler != nullptr) && !connectHandler(params.clientId)) {
+                    if (connectHandler && !connectHandler(params.clientId)) {
                         return Server::ConnectResponse::RefusedIdentifier;
                     }
                 }
@@ -2434,7 +2395,7 @@ namespace mqtt {
                     );
                     printMessage("Client [\"" + client.clientId + "\":" + std::to_string(client.connectionId) + "] connected");
                 } catch (...) {
-                    if (disconnectHandler != nullptr) {
+                    if (disconnectHandler) {
                         disconnectHandler(params.clientId);
                     }
                     throw;
@@ -2471,7 +2432,7 @@ namespace mqtt {
                 receivedQoS2.Unregister(connectionId);
                 clients.Delete(connectionId);
                 {
-                    if (disconnectHandler != nullptr) {
+                    if (disconnectHandler) {
                         disconnectHandler(client.clientId);
                     }
                 }

@@ -70,7 +70,7 @@ ConsoleWindow::ConsoleWindow()
 
 ConsoleWindow::~ConsoleWindow()
 {
-    if (about != nullptr) {
+    if (about) {
         delete about;
     }
 }
@@ -198,7 +198,7 @@ LRESULT ConsoleWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) noe
             break;
         case IDM_MENU_ABOUT:
             try {
-                if (about != nullptr) {
+                if (about) {
                     delete about;
                 }
                 about = new AboutWindow(hWnd);

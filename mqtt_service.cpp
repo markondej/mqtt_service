@@ -24,7 +24,7 @@ std::vector<uint8_t> GeneratePayload(const std::string &string) {
 #ifndef _WIN32
 void signalHandler(int sigNum)
 {
-    if ((service != nullptr) && service->IsEnabled()) {
+    if (service && service->IsEnabled()) {
         service->Disable();
     }
 }
@@ -100,12 +100,12 @@ int main(int argc, char** argv)
 #endif
     }
 
-    if (service != nullptr) {
+    if (service) {
         auto temp = service;
         service = nullptr;
         delete temp;
     }
-    if (console != nullptr) {
+    if (console) {
         delete console;
     }
     return result;

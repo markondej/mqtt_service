@@ -132,14 +132,14 @@ WPARAM Window::HandleMessages(const StatusHandler &status)
     MSG msg;
     while (true) {
         if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-            if ((WindowInstances::GetWindow(msg.hwnd) == nullptr) || !IsDialogMessage(msg.hwnd, &msg)) {
+            if (!WindowInstances::GetWindow(msg.hwnd) || !IsDialogMessage(msg.hwnd, &msg)) {
                 if (msg.message == WM_QUIT) {
                     break;
                 }
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
             }
-        } else if ((status != nullptr) && !status()) {
+        } else if (status && !status()) {
             for (auto &instance : WindowInstances::GetAll()) {
                 instance.window->Close(TRUE);
             }
@@ -152,13 +152,13 @@ WPARAM Window::HandleMessages(const StatusHandler &status)
 
 LRESULT CALLBACK Window::WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept {
     Window *window = WindowInstances::GetWindow(hWnd);
-    if (window == nullptr) {
+    if (!window) {
         CHAR windowClass[WINDOW_CLASS_NAME_LENGTH];
         if (GetClassName(hWnd, windowClass, WINDOW_CLASS_NAME_LENGTH) > 0) {
             window = WindowInstances::GetWindow(NULL, windowClass);
         }
     }
-    if (window != nullptr) {
+    if (window) {
         if (msg == WM_DESTROY) {
             window->active = false;
         }
